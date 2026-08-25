@@ -1,0 +1,68 @@
+[project]
+name = "forge-api"
+version = "0.1.0"
+description = "Forge control-plane API (FastAPI)"
+requires-python = ">=3.11"
+dependencies = [
+    "fastapi>=0.115,<0.142",
+    "uvicorn[standard]>=0.30,<0.53",
+    "pydantic>=2.7,<3",
+    "pydantic-settings>=2.4,<3",
+    "sqlalchemy[asyncio]>=2.0,<3",
+    "asyncpg>=0.29,<0.32",
+    "psycopg[binary]>=3.2,<4",
+    "alembic>=1.13,<2",
+    "structlog>=24.1,<25",
+    "httpx>=0.27,<0.30",
+    "anyio>=4.4,<5",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0,<10",
+    "pytest-asyncio>=0.23,<0.25",
+    "ruff>=0.6,<1",
+    "mypy>=1.10,<3",
+    "aiosqlite>=0.20,<0.21",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["app"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.ruff.lint]
+select = [
+    "E",
+    "F",
+    "W",
+    "I",
+    "B",
+    "UP",
+    "ASYNC",
+    "S",
+    "RUF",
+]
+ignore = [
+    "S101",  # Allow `assert` in tests.
+]
+
+[tool.ruff.lint.per-file-ignores]
+"app/db/**" = ["E501"]  # Long SQL strings inside db/ are fine.
+"app/config/**" = ["S104"]  # 0.0.0.0 is the default API bind address.
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+addopts = "-ra --strict-markers"
+
+[tool.mypy]
+python_version = "3.11"
+strict = true
+ignore_missing_imports = true

@@ -1,0 +1,87 @@
+# Forge — local development infrastructure
+#
+# `docker compose up postgres` is the canonical first step. The api, worker,
+# and web services are profiled so they can be run either with Docker or
+# directly on the host (the recommended path during Phase 0 because it
+# provides faster reload cycles).
+#
+# Phase 0 services are intentionally minimal. They do not implement any
+# product functionality.
+
+services:
+  postgres:
+    image: pgvector/pgvector:pg16
+    container_name: forge-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: forge
+      POSTGRES_PASSWORD: forge
+      POSTGRES_DB: forge
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test:
+        - "CMD-SHELL"
+        - "pg_isready -U forge -d forge"
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  # ----- Application services (opt-in via --profile) -----
+
+  api:
+    profiles: ["apps"]
+    build:
+      context: .
+      dockerfile: infra/docker/api.Dockerfile
+    container_name: forge-api
+    depends_on:
+      postgres:
+        condition: service_healthy
+    env_file: .env
+    environment:
+      DATABASE_URL: postgresql+asyncpg://forge:forge@postgres:5432/forge
+      API_HOST: 0.0.0.0
+      API_PORT: "8000"
+      ENVIRONMENT: development
+      LOG_LEVEL: INFO
+    ports:
+      - "8000:8000"
+    command: ["uv", "run", "uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
+
+  worker:
+    profiles: ["apps"]
+    build:
+      context: .
+      dockerfile: infra/docker/worker.Dockerfile
+    container_name: forge-worker
+    depends_on:
+      postgres:
+        condition: service_healthy
+    env_file: .env
+    environment:
+      DATABASE_URL: postgresql+asyncpg://forge:forge@postgres:5432/forge
+      ENVIRONMENT: development
+      LOG_LEVEL: INFO
+    command: ["uv", "run", "python", "-m", "forge_worker"]
+
+  web:
+    profiles: ["apps"]
+    build:
+      context: .
+      dockerfile: infra/docker/web.Dockerfile
+    container_name: forge-web
+    env_file: .env
+    environment:
+      API_BASE_URL: http://api:8000
+      WEB_PORT: "3000"
+    ports:
+      - "3000:3000"
+    depends_on:
+      - api
+
+volumes:
+  postgres-data:
+    name: forge-postgres-data

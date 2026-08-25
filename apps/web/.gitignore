@@ -1,0 +1,11 @@
+# Local Next.js build output
+.next/
+
+# Test/coverage output
+coverage/
+
+# Vitest cache
+.vitest/
+
+# Logs
+*.log

@@ -1,0 +1,169 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+# Allow only one concurrent run per ref. Avoids wasted minutes when
+# developers push rapidly to a single branch.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  ci:
+    name: Lint, test, and build
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    env:
+      PYTHON_VERSION: "3.11"
+      NODE_VERSION: "24"
+      # CI is the source of truth for env defaults. The application
+      # only reads DATABASE_URL at runtime.
+      DATABASE_URL: postgresql+asyncpg://forge:forge@localhost:5432/forge
+
+    services:
+      postgres:
+        image: pgvector/pgvector:pg16
+        env:
+          POSTGRES_USER: forge
+          POSTGRES_PASSWORD: forge
+          POSTGRES_DB: forge
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U forge -d forge"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Set up Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Install uv
+        run: pip install uv==0.4.18
+
+      - name: Set up Node
+        uses: actions/setup-node@v7
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      - name: Enable pnpm
+        run: corepack enable && corepack prepare pnpm@9.12.0 --activate
+
+      - name: Cache pnpm store
+        uses: actions/cache@v6
+        with:
+          path: ~/.local/share/pnpm/store
+          key: pnpm-${{ runner.os }}-${{ hashFiles('**/pnpm-lock.yaml') }}
+          restore-keys: pnpm-${{ runner.os }}-
+
+      - name: Cache uv cache
+        uses: actions/cache@v6
+        with:
+          path: ~/.cache/uv
+          key: uv-${{ runner.os }}-${{ hashFiles('**/uv.lock', '**/pyproject.toml') }}
+          restore-keys: uv-${{ runner.os }}-
+
+      - name: Install API deps
+        working-directory: apps/api
+        run: uv sync --all-extras
+
+      - name: Install worker deps
+        working-directory: workers/execution
+        run: uv sync --all-extras
+
+      - name: Install shared deps
+        working-directory: packages/shared
+        run: uv sync --all-extras
+
+      - name: Install web deps
+        run: pnpm install --frozen-lockfile
+
+      # ---- Lint & format ----
+
+      - name: API lint
+        working-directory: apps/api
+        run: uv run ruff check .
+
+      - name: API format check
+        working-directory: apps/api
+        run: uv run ruff format --check .
+
+      - name: Worker lint
+        working-directory: workers/execution
+        run: uv run ruff check .
+
+      - name: Worker format check
+        working-directory: workers/execution
+        run: uv run ruff format --check .
+
+      - name: Shared lint
+        working-directory: packages/shared
+        run: uv run ruff check .
+
+      - name: API typecheck
+        working-directory: apps/api
+        run: uv run mypy app
+
+      - name: Worker typecheck
+        working-directory: workers/execution
+        run: uv run mypy src
+
+      - name: Web lint
+        run: pnpm --filter @forge/web lint
+
+      - name: Web typecheck
+        run: pnpm --filter @forge/web typecheck
+
+      # ---- Migrations ----
+
+      - name: Apply database migrations
+        working-directory: apps/api
+        run: uv run alembic upgrade head
+
+      - name: Verify required extensions
+        env:
+          PGPASSWORD: forge
+        run: |
+          psql -h localhost -U forge -d forge -tAc \
+            "SELECT extname FROM pg_extension WHERE extname IN ('uuid-ossp','vector') ORDER BY extname;" \
+            | tee /tmp/extensions.txt
+          expected="uuid-ossp
+          vector"
+          actual="$(cat /tmp/extensions.txt)"
+          [ "$actual" = "$expected" ] || {
+            echo "Expected extensions were not present. Got: $actual"
+            exit 1
+          }
+
+      # ---- Tests ----
+
+      - name: API tests
+        working-directory: apps/api
+        run: uv run pytest
+
+      - name: Worker tests
+        working-directory: workers/execution
+        run: uv run pytest
+
+      - name: Shared tests
+        working-directory: packages/shared
+        run: uv run pytest
+
+      - name: Web tests
+        run: pnpm --filter @forge/web test
+
+      # ---- Build ----
+
+      - name: Web build
+        run: pnpm --filter @forge/web build
