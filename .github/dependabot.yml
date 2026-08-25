@@ -11,8 +11,12 @@ updates:
       prefix: "chore(deps)"
 
   - package-ecosystem: "npm"
-    directories:
-      - apps/web
+    directory: "/"
+    # Scan the pnpm workspace from the root so dependency PRs also update
+    # the root pnpm-lock.yaml. Scanning apps/web directly produces PRs
+    # without lockfile changes, which fail CI under --frozen-lockfile.
+    allow:
+      - dependency-type: "direct"
     schedule:
       interval: "weekly"
     commit-message:
