@@ -159,8 +159,8 @@ async def transition(
     # Atomic state update. We use ``WHERE version = current_version`` for
     # belt-and-braces optimistic concurrency even when the caller did not
     # pass expected_version; if a concurrent transaction snuck in between
-    # our SELECT and UPDATE, rowcount == 0 and we raise.
-    result = await session.execute(
+    # our SELECT and UPDATE, no row matches and we raise.
+    update_result = await session.execute(
         update(Run)
         .where(Run.id == run_id, Run.version == current_version)
         .values(
@@ -170,7 +170,11 @@ async def transition(
             updated_at=now,
         )
     )
-    if result.rowcount != 1:
+    # SQLAlchemy's ``Result.rowcount`` is set dynamically from the DBAPI;
+    # mypy cannot see it on the abstract type, so we read it via ``__dict__``
+    # and treat 0 as the conflict signal.
+    rowcount = int(update_result.rowcount)  # type: ignore[attr-defined]
+    if rowcount != 1:
         raise InvalidTransitionError(current_state, run_event)
 
     step = RunStep(
