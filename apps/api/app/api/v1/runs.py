@@ -20,6 +20,7 @@ annotations`` because FastAPI evaluates the path-parameter annotation
 referring to it as a string under ``from __future__ import annotations``
 breaks dependency introspection in some FastAPI versions.
 """
+
 import uuid
 from typing import Annotated
 

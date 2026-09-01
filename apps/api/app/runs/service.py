@@ -29,6 +29,7 @@ If a future requirement demands features that this module cannot express
 (for example, conditional transitions based on the task text), extend
 here — do not duplicate the chokepoint elsewhere.
 """
+
 from __future__ import annotations
 
 import uuid

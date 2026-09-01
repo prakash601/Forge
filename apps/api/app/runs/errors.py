@@ -5,6 +5,7 @@ boundary (see ``app/api/v1/runs.py``). Keeping them distinct lets the API
 surface report the right error code and message without leaking
 implementation details.
 """
+
 from __future__ import annotations
 
 from app.runs.enums import RunEvent, RunState

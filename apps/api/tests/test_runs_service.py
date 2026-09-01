@@ -13,6 +13,7 @@ These tests run against a real PostgreSQL database (see
   * Crash recovery: applying an event and rolling back leaves the run in
     its prior state with no stray run_steps row.
 """
+
 from __future__ import annotations
 
 import uuid
@@ -87,12 +88,14 @@ async def test_forward_path_writes_steps_and_bumps_version(
 
     # All steps persisted, in order, with the right (from, event, to).
     steps = (
-        await session.execute(
-            select(RunStep)
-            .where(RunStep.run_id == run.id)
-            .order_by(RunStep.sequence)
+        (
+            await session.execute(
+                select(RunStep).where(RunStep.run_id == run.id).order_by(RunStep.sequence)
+            )
         )
-    ).scalars().all()
+        .scalars()
+        .all()
+    )
     assert [s.sequence for s in steps] == [1, 2, 3, 4]
     assert steps[0].from_state is RunState.CREATED
     assert steps[0].event == "repository_ready"
@@ -183,9 +186,7 @@ async def test_crash_recovery_no_state_change_on_rollback(
 
         count = (
             await session.execute(
-                select(func.count())
-                .select_from(RunStep)
-                .where(RunStep.run_id == run_id)
+                select(func.count()).select_from(RunStep).where(RunStep.run_id == run_id)
             )
         ).scalar_one()
         assert count == 0
@@ -204,13 +205,13 @@ async def test_run_steps_unique_per_run_sequence(session: AsyncSession) -> None:
     await session.commit()
     # Two reads of the step list show consistent sequence numbers.
     s1 = (
-        await session.execute(
-            select(RunStep.sequence).where(RunStep.run_id == run.id)
-        )
-    ).scalars().all()
+        (await session.execute(select(RunStep.sequence).where(RunStep.run_id == run.id)))
+        .scalars()
+        .all()
+    )
     s2 = (
-        await session.execute(
-            select(RunStep.sequence).where(RunStep.run_id == run.id)
-        )
-    ).scalars().all()
+        (await session.execute(select(RunStep.sequence).where(RunStep.run_id == run.id)))
+        .scalars()
+        .all()
+    )
     assert s1 == s2 == [1]

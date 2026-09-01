@@ -13,6 +13,7 @@ The service layer (:mod:`app.runs.service`) is the only place that
 mutates ``Run.state`` and inserts ``RunStep`` rows, and it always does
 both in a single transaction.
 """
+
 from __future__ import annotations
 
 import uuid
@@ -74,12 +75,8 @@ class Run(Base):
     is_terminal: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     task: Mapped[str] = mapped_column(Text, nullable=False)
     version: Mapped[int] = mapped_column(BigInteger, nullable=False, default=0)
-    created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), nullable=False
-    )
-    updated_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), nullable=False
-    )
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 
     steps: Mapped[list[RunStep]] = relationship(
         "RunStep",
@@ -132,9 +129,7 @@ class RunStep(Base):
         ),
         nullable=False,
     )
-    created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), nullable=False
-    )
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 
     run: Mapped[Run] = relationship("Run", back_populates="steps")
 

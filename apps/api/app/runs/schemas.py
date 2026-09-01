@@ -7,6 +7,7 @@ We expose the full Run representation on create + read so callers can
 introspect the timeline (``steps``). The state machine is a public
 contract; serialising it does not leak implementation details.
 """
+
 from __future__ import annotations
 
 import uuid

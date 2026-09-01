@@ -11,6 +11,7 @@ Revises: 0001_enable_extensions
 Create Date: 2026-09-02 00:00:00
 
 """
+
 from __future__ import annotations
 
 from pathlib import Path
@@ -25,10 +26,7 @@ depends_on = None
 
 
 _SQL_FILE = (
-    Path(__file__).resolve().parents[4]
-    / "db"
-    / "migrations"
-    / "0002_runs_and_run_steps.sql"
+    Path(__file__).resolve().parents[4] / "db" / "migrations" / "0002_runs_and_run_steps.sql"
 )
 
 

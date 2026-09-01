@@ -14,6 +14,7 @@ These tests are deliberately pure (no database, no fixtures, no I/O).
 They run in milliseconds and act as living documentation of the
 contract.
 """
+
 from __future__ import annotations
 
 import pytest
@@ -137,9 +138,7 @@ def test_terminal_states_are_terminal_per_doc() -> None:
         (RunState.NEEDS_HUMAN, RunEvent.CANCEL, RunState.CANCELLED),
     ],
 )
-def test_next_state_explicit_rows(
-    current: RunState, event: RunEvent, expected: RunState
-) -> None:
+def test_next_state_explicit_rows(current: RunState, event: RunEvent, expected: RunState) -> None:
     assert next_state(current, event) == expected
 
 

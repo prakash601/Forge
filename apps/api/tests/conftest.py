@@ -26,6 +26,7 @@ type (``run_state``) and ``gen_random_uuid()`` server defaults; neither
 is supported by SQLite. Reverting to SQLite would require divergent
 ORM definitions for test vs. prod.
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -76,17 +77,13 @@ async def _create_database_and_apply_migrations(async_dsn: str) -> None:
     finally:
         await bootstrap_engine.dispose()
 
-    migrations_dir = (
-        Path(__file__).resolve().parents[3] / "db" / "migrations"
-    )
+    migrations_dir = Path(__file__).resolve().parents[3] / "db" / "migrations"
     engine = create_async_engine(async_dsn)
     try:
         sql_files = sorted(migrations_dir.glob("*.sql"))
         async with engine.connect() as conn:
             for sql_file in sql_files:
-                for statement in _split_sql_statements(
-                    sql_file.read_text(encoding="utf-8")
-                ):
+                for statement in _split_sql_statements(sql_file.read_text(encoding="utf-8")):
                     await conn.execute(text(statement))
             await conn.commit()
     finally:
@@ -129,9 +126,7 @@ def _split_sql_statements(sql: str) -> list[str]:
 async def _truncate_all(engine: AsyncEngine) -> None:
     """Empty the run-related tables between integration tests."""
     async with engine.connect() as conn:
-        await conn.execute(
-            text("TRUNCATE TABLE run_steps, runs RESTART IDENTITY CASCADE")
-        )
+        await conn.execute(text("TRUNCATE TABLE run_steps, runs RESTART IDENTITY CASCADE"))
         await conn.commit()
 
 
@@ -148,9 +143,7 @@ def postgres_engine_url() -> str:
         return explicit
 
     if os.environ.get("FORGE_TEST_NO_TESTCONTAINERS") == "1":
-        pytest.skip(
-            "FORGE_TEST_NO_TESTCONTAINERS=1 and no FORGE_TEST_DATABASE_URL provided"
-        )
+        pytest.skip("FORGE_TEST_NO_TESTCONTAINERS=1 and no FORGE_TEST_DATABASE_URL provided")
 
     try:
         from testcontainers.community.postgres import PostgresContainer
@@ -190,9 +183,7 @@ def app_settings(postgres_engine_url: str) -> Any:
     """Settings pointing at the test database."""
     from app.config import Settings
 
-    return Settings(
-        database_url=postgres_engine_url, environment="test", log_level="WARNING"
-    )
+    return Settings(database_url=postgres_engine_url, environment="test", log_level="WARNING")
 
 
 @pytest_asyncio.fixture

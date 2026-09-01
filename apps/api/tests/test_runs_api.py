@@ -12,6 +12,7 @@ Plus error paths: 404 unknown run, 409 invalid transition, 409 terminal,
 These tests use the same Postgres-backed fixture as the service tests
 (``tests/conftest.py``).
 """
+
 from __future__ import annotations
 
 import pytest
@@ -39,9 +40,7 @@ async def test_create_run_rejects_empty_task(client: AsyncClient) -> None:
 
 
 async def test_get_run_404_envelope(client: AsyncClient) -> None:
-    response = await client.get(
-        "/api/v1/runs/00000000-0000-0000-0000-000000000000"
-    )
+    response = await client.get("/api/v1/runs/00000000-0000-0000-0000-000000000000")
     assert response.status_code == 404
     body = response.json()
     assert body["error"]["code"] == "RESOURCE_NOT_FOUND"
@@ -133,9 +132,7 @@ async def test_get_run_after_transitions_returns_full_timeline(
 ) -> None:
     created = (await client.post("/api/v1/runs", json={"task": "x"})).json()
     for event in ("repository_ready", "analysis_complete"):
-        await client.post(
-            f"/api/v1/runs/{created['id']}/events", json={"event": event}
-        )
+        await client.post(f"/api/v1/runs/{created['id']}/events", json={"event": event})
     response = await client.get(f"/api/v1/runs/{created['id']}")
     assert response.status_code == 200, response.text
     body = response.json()
@@ -146,9 +143,7 @@ async def test_get_run_after_transitions_returns_full_timeline(
 
 
 @pytest.mark.parametrize("bad_uuid", ["not-a-uuid", "12345", " "])
-async def test_get_run_with_malformed_uuid_returns_422(
-    client: AsyncClient, bad_uuid: str
-) -> None:
+async def test_get_run_with_malformed_uuid_returns_422(client: AsyncClient, bad_uuid: str) -> None:
     # FastAPI's path validation produces 422 for unparseable UUIDs.
     response = await client.get(f"/api/v1/runs/{bad_uuid}")
     assert response.status_code == 422

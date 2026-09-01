@@ -9,6 +9,7 @@ Python: the Postgres ``run_state`` enum in
 Changing a value here is a contract change. Open a doc-bump issue and add a
 new ``_v0.2`` state-machine document; do not silently rename.
 """
+
 from __future__ import annotations
 
 from enum import Enum
