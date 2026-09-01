@@ -22,7 +22,8 @@ from app.api.v1 import router as api_v1_router
 from app.config import Settings, get_settings
 from app.core.errors import install_exception_handlers
 from app.core.logging import configure_logging, get_logger
-from app.db.session import dispose_engine, init_engine
+from app.db.session import dispose_engine, get_session_factory, init_engine
+from app.orchestrator import Orchestrator, StateAgentRegistry
 
 log = get_logger(__name__)
 
@@ -34,15 +35,23 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     Startup:
       - Configure structured logging.
       - Initialize the database engine.
+      - Build the orchestrator (in-process for Phase 1).
       - Log "api_started" with the bind address.
 
     Shutdown:
+      - Drain outstanding orchestrator tasks.
       - Dispose the database engine.
       - Log "api_stopped".
     """
     settings: Settings = app.state.settings
     configure_logging(settings)
     init_engine(settings)
+    factory = get_session_factory()
+    orchestrator = Orchestrator(
+        driver=StateAgentRegistry(),
+        session_maker=factory,
+    )
+    app.state.orchestrator = orchestrator
     log.info(
         "api_started",
         version=__version__,
@@ -53,6 +62,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     try:
         yield
     finally:
+        await orchestrator.shutdown()
         await dispose_engine()
         log.info("api_stopped", version=__version__)
 

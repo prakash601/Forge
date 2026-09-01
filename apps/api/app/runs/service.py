@@ -191,6 +191,12 @@ async def transition(
     # Refresh to surface the new state/version on the returned object.
     refreshed = await session.get(Run, run_id)
     assert refreshed is not None  # we just updated it
+    # Stash the from_state on the Run instance so the API layer can
+    # notify the orchestrator without a second database read. This is
+    # a transient attribute — it is not persisted and may disappear
+    # after session close. The Pydantic response model deliberately
+    # does not include it.
+    refreshed._from_state = current_state  # type: ignore[attr-defined]
     return refreshed
 
 

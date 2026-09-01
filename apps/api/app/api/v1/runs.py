@@ -30,7 +30,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.errors import error_payload
 from app.core.logging import get_logger
 from app.db.session import get_session
+from app.orchestrator.orchestrator import Orchestrator
 from app.runs import service
+from app.runs.enums import RunState
 from app.runs.errors import (
     InvalidTransitionError,
     RunNotFoundError,
@@ -45,6 +47,20 @@ from app.runs.schemas import (
 
 router = APIRouter(prefix="/runs", tags=["runs"])
 log = get_logger(__name__)
+
+
+def _orchestrator(request: Request) -> Orchestrator | None:
+    """Return the app-scoped orchestrator, or None if not installed.
+
+    The orchestrator is installed by the FastAPI lifespan handler. In
+    unit tests that build the app without lifespan, ``app.state`` may
+    not have it; we return ``None`` and the caller skips the hook so
+    the existing tests (Issue #001) keep passing.
+    """
+    orchestrator = getattr(request.app.state, "orchestrator", None)
+    if orchestrator is None:
+        log.debug("orchestrator_not_installed_skipping_hook")
+    return orchestrator
 
 
 @router.post(
@@ -71,7 +87,20 @@ async def create_run_endpoint(
     # Run has no steps yet, but the call is cheap and consistent with
     # the other endpoints.
     await session.refresh(run, attribute_names=["steps"])
-    return RunRead.model_validate(run)
+    response = RunRead.model_validate(run)
+
+    # Hook: notify the orchestrator that a new Run exists in CREATED.
+    # The driver will schedule the next agent task if one is registered.
+    orchestrator = _orchestrator(request)
+    if orchestrator is not None:
+        orchestrator.handle_transition(
+            run_id=run.id,
+            from_state=RunState.CREATED,  # pre-state (no transition yet)
+            to_state=RunState.CREATED,
+            event="<create>",
+            request_id=request.state.request_id,
+        )
+    return response
 
 
 @router.post(
@@ -139,7 +168,22 @@ async def apply_event_endpoint(
     # Populate ``steps`` while the session is still active so the
     # Pydantic response can be built without triggering lazy I/O.
     await session.refresh(run, attribute_names=["steps"])
-    return RunRead.model_validate(run)
+    response = RunRead.model_validate(run)
+
+    # Hook: notify the orchestrator. We captured the from_state on the
+    # Run instance inside ``service.transition()`` as a transient
+    # attribute; default to the new state if missing (defensive).
+    orchestrator = _orchestrator(request)
+    if orchestrator is not None:
+        from_state: RunState = getattr(run, "_from_state", run.state)
+        orchestrator.handle_transition(
+            run_id=run.id,
+            from_state=from_state,
+            to_state=run.state,
+            event=payload.event,
+            request_id=request_id,
+        )
+    return response
 
 
 @router.get(
