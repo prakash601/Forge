@@ -65,3 +65,8 @@ postgres-data/
 
 # ----- Private design docs (kept local only) -----
 docs/
+
+# ----- Local-only project tracker & issue template -----
+# STATUS.md / tracker lives in working tree only.
+# Issue template is for local reference; issue bodies live on GitHub.
+.github/ISSUE_TEMPLATE/

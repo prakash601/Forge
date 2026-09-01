@@ -23,12 +23,17 @@ The product thesis and target users are summarized below; the full PRD is mainta
 
 ## Current project status
 
-**Phase 0 — Repository Bootstrap.**
+**Phase 1 — MVP Vertical Slice Foundations.** The Phase 0 repository
+bootstrap is complete; we are now building the durable orchestration
+backbone (Run state machine, schema, minimal API). Agents and the
+autonomous loop come in Phase 2.
 
-This phase establishes the repository foundation only. The following are **not implemented yet**:
+See [docs/STATUS.md](docs/STATUS.md) for the phase ledger, current goal,
+and the index of all run-task issues.
+
+**Not implemented yet (Phase 2+):**
 
 - The AI agent runtime (Archaeologist, Architect, Developer, Tester, Debugger, Reviewer).
-- The orchestrator / run state machine.
 - The autonomous coding loop.
 - GitHub repository integration and PR automation.
 - Project memory retrieval.

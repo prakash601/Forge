@@ -2,9 +2,9 @@ name: ci
 
 on:
   push:
-    branches: [main]
+    branches: [main, develop]
   pull_request:
-    branches: [main]
+    branches: [main, develop]
 
 # Allow only one concurrent run per ref. Avoids wasted minutes when
 # developers push rapidly to a single branch.
