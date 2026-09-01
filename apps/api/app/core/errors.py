@@ -68,6 +68,7 @@ def install_exception_handlers(app: FastAPI) -> None:
             403: "AUTHORIZATION_ERROR",
             404: "RESOURCE_NOT_FOUND",
             409: "CONFLICT",
+            422: "VALIDATION_ERROR",
             429: "RATE_LIMITED",
         }.get(exc.status_code, "INTERNAL_ERROR")
         message = str(exc.detail) if exc.detail else "Request failed."

@@ -23,7 +23,9 @@ dev = [
     "pytest-asyncio>=0.23,<1.5",
     "ruff>=0.6,<1",
     "mypy>=1.10,<3",
-    "aiosqlite>=0.20,<0.23",
+    # Postgres-only test runs. Started on demand via testcontainers; tests
+    # can be pointed at an external Postgres with FORGE_TEST_DATABASE_URL.
+    "testcontainers[postgres]>=4.8,<5",
 ]
 
 [build-system]
@@ -56,11 +58,16 @@ ignore = [
 [tool.ruff.lint.per-file-ignores]
 "app/db/**" = ["E501"]  # Long SQL strings inside db/ are fine.
 "app/config/**" = ["S104"]  # 0.0.0.0 is the default API bind address.
+"app/runs/enums.py" = ["UP042"]  # (str, Enum) is more compatible than StrEnum with Pydantic/SQLAlchemy.
+"tests/conftest.py" = ["ASYNC240", "S110"]  # Path() at startup; best-effort container teardown.
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 testpaths = ["tests"]
 addopts = "-ra --strict-markers"
+markers = [
+    "integration: requires a Postgres database (started via testcontainers).",
+]
 
 [tool.mypy]
 python_version = "3.11"
