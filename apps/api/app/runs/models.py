@@ -31,17 +31,10 @@ from sqlalchemy import (
 )
 from sqlalchemy import Enum as SAEnum
 from sqlalchemy.dialects.postgresql import UUID as PG_UUID
-from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
+from sqlalchemy.orm import Mapped, mapped_column, relationship
 
+from app.db.base import Base
 from app.runs.enums import RunState
-
-
-class Base(DeclarativeBase):
-    """Declarative base for the runs package models.
-
-    Kept separate from any future global ``Base`` so Phase 1 owns its own
-    schema and cannot be accidentally mutated by other packages.
-    """
 
 
 class Run(Base):

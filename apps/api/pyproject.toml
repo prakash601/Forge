@@ -6,7 +6,7 @@ requires-python = ">=3.11"
 dependencies = [
     "fastapi>=0.115,<0.142",
     "uvicorn[standard]>=0.30,<0.53",
-    "pydantic>=2.7,<3",
+    "pydantic[email]>=2.7,<3",
     "pydantic-settings>=2.4,<3",
     "sqlalchemy[asyncio]>=2.0,<3",
     "asyncpg>=0.29,<0.32",
@@ -15,6 +15,7 @@ dependencies = [
     "structlog>=24.1,<27",
     "httpx>=0.27,<0.30",
     "anyio>=4.4,<5",
+    "pgvector>=0.5.0",
 ]
 
 [project.optional-dependencies]
@@ -59,6 +60,9 @@ ignore = [
 "app/db/**" = ["E501"]  # Long SQL strings inside db/ are fine.
 "app/config/**" = ["S104"]  # 0.0.0.0 is the default API bind address.
 "app/runs/enums.py" = ["UP042"]  # (str, Enum) is more compatible than StrEnum with Pydantic/SQLAlchemy.
+"app/users/enums.py" = ["UP042"]  # Same justification.
+"app/projects/enums.py" = ["UP042"]  # Same.
+"app/memory/enums.py" = ["UP042"]  # Same.
 "app/orchestrator/runtime.py" = ["S110", "ASYNC109"]  # Best-effort coroutine close; explicit asyncio.wait timeout is intentional.
 "tests/conftest.py" = ["ASYNC240", "S110"]  # Path() at startup; best-effort container teardown.
 

@@ -130,7 +130,12 @@ def _split_sql_statements(sql: str) -> list[str]:
 async def _truncate_all(engine: AsyncEngine) -> None:
     """Empty the run-related tables between integration tests."""
     async with engine.connect() as conn:
-        await conn.execute(text("TRUNCATE TABLE run_steps, runs RESTART IDENTITY CASCADE"))
+        await conn.execute(
+            text(
+                "TRUNCATE TABLE memory_embeddings, memory_items, projects, users, "
+                "run_steps, runs RESTART IDENTITY CASCADE"
+            )
+        )
         await conn.commit()
 
 
@@ -202,6 +207,13 @@ async def app_instance(app_settings: Any) -> AsyncIterator[Any]:
     from app.main import create_app
 
     db_session.init_engine(app_settings)
+    # Truncate before each test that uses this fixture so HTTP-only
+    # tests (which do not pull in the ``engine`` fixture) still get
+    # a clean slate.
+    factory = db_session.get_session_factory()
+    eng = factory.kw["bind"]
+    assert isinstance(eng, AsyncEngine)
+    await _truncate_all(eng)
     app = create_app(app_settings)
     try:
         yield app
