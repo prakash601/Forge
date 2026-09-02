@@ -59,6 +59,7 @@ ignore = [
 "app/db/**" = ["E501"]  # Long SQL strings inside db/ are fine.
 "app/config/**" = ["S104"]  # 0.0.0.0 is the default API bind address.
 "app/runs/enums.py" = ["UP042"]  # (str, Enum) is more compatible than StrEnum with Pydantic/SQLAlchemy.
+"app/orchestrator/runtime.py" = ["S110", "ASYNC109"]  # Best-effort coroutine close; explicit asyncio.wait timeout is intentional.
 "tests/conftest.py" = ["ASYNC240", "S110"]  # Path() at startup; best-effort container teardown.
 
 [tool.pytest.ini_options]

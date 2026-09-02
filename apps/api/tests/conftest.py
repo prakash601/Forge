@@ -47,6 +47,10 @@ from sqlalchemy.ext.asyncio import (
     create_async_engine,
 )
 
+# Forward import for type hints. The actual orchestrator is built
+# inside the fixture to avoid a hard dependency at module import time.
+from app.orchestrator import Orchestrator
+
 # Force test mode so the application does not emit structured JSON to
 # the test runner's stdout.
 os.environ.setdefault("ENVIRONMENT", "test")
@@ -248,3 +252,38 @@ async def client(app_instance: Any) -> AsyncIterator[AsyncClient]:
     transport = ASGITransport(app=app_instance)
     async with AsyncClient(transport=transport, base_url="http://testserver") as ac:
         yield ac
+
+
+@pytest_asyncio.fixture
+async def orchestrator_app(
+    app_settings: Any,
+) -> AsyncIterator[tuple[AsyncClient, Orchestrator]]:
+    """Build an app with the orchestrator wired in, returning the client.
+
+    The orchestrator is installed on ``app.state`` and uses the same
+    async session factory as the API layer. Tests can inspect
+    ``orchestrator.runtime`` to assert on in-flight tasks.
+    """
+    from app.config import get_settings
+
+    get_settings.cache_clear()
+
+    from app.db import session as db_session
+    from app.main import create_app
+    from app.orchestrator import Orchestrator, StateAgentRegistry
+
+    db_session.init_engine(app_settings)
+    app = create_app(app_settings)
+    factory = db_session.get_session_factory()
+    orchestrator = Orchestrator(
+        driver=StateAgentRegistry(),
+        session_maker=factory,
+    )
+    app.state.orchestrator = orchestrator
+    try:
+        transport = ASGITransport(app=app)
+        async with AsyncClient(transport=transport, base_url="http://testserver") as ac:
+            yield ac, orchestrator
+    finally:
+        await orchestrator.shutdown()
+        await db_session.dispose_engine()
