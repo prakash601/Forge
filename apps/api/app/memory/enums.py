@@ -28,12 +28,13 @@ class MemoryType(str, Enum):
 class MemoryStatus(str, Enum):
     """Lifecycle status of a memory item.
 
-    Matches the ``CHECK`` constraint in migration 0005.
+    Matches the ``CHECK`` constraint in migrations 0005/0006.
     """
 
     ACTIVE = "ACTIVE"
     SUPERSEDED = "SUPERSEDED"
     INVALIDATED = "INVALIDATED"
+    EMBEDDING_FAILED = "EMBEDDING_FAILED"
 
 
 __all__ = ["MemoryStatus", "MemoryType"]

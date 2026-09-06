@@ -11,7 +11,7 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Literal
 
-from pydantic import Field, field_validator
+from pydantic import AliasChoices, Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 LogLevel = Literal["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"]
@@ -37,6 +37,7 @@ class Settings(BaseSettings):
         env_file_encoding="utf-8",
         case_sensitive=False,
         extra="ignore",
+        populate_by_name=True,
     )
 
     # ----- Runtime -----
@@ -68,6 +69,37 @@ class Settings(BaseSettings):
             "and test, in which case callers must provide their own DSN "
             "before connecting."
         ),
+    )
+
+    # ----- Embeddings (Issue #004) -----
+    embedding_provider: str = Field(
+        default="fake",
+        validation_alias=AliasChoices("embedding_provider", "FORGE_EMBEDDING_PROVIDER"),
+        description="Embedding provider name: 'fake' (CI/tests) or 'openai'.",
+    )
+    openai_api_key: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices("openai_api_key", "OPENAI_API_KEY"),
+        description="OpenAI API key. Required only when embedding_provider=openai.",
+    )
+    embedding_model: str = Field(
+        default="text-embedding-3-small",
+        validation_alias=AliasChoices("embedding_model", "FORGE_EMBEDDING_MODEL"),
+        description="Embedding model name.",
+    )
+    embedding_dimension: int = Field(
+        default=1536,
+        validation_alias=AliasChoices("embedding_dimension", "FORGE_EMBEDDING_DIMENSION"),
+        ge=1,
+        description="Expected embedding dimension (matches VECTOR column).",
+    )
+    embedding_timeout_seconds: float = Field(
+        default=30.0,
+        validation_alias=AliasChoices(
+            "embedding_timeout_seconds", "FORGE_EMBEDDING_TIMEOUT_SECONDS"
+        ),
+        gt=0,
+        description="HTTP timeout for embedding provider calls.",
     )
 
     @field_validator("cors_allow_origins", mode="before")
