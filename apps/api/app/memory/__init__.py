@@ -23,8 +23,13 @@ Layering
 from __future__ import annotations
 
 from app.memory.enums import MemoryStatus, MemoryType
-from app.memory.errors import MemoryItemNotFoundError
+from app.memory.errors import (
+    EmbeddingDimensionMismatchError,
+    EmbeddingProviderError,
+    MemoryItemNotFoundError,
+)
 from app.memory.models import MemoryEmbedding, MemoryItem
+from app.memory.pipeline import backfill_missing, embed_memory_item
 from app.memory.service import (
     create_memory_item,
     get_memory_item,
@@ -32,12 +37,16 @@ from app.memory.service import (
 )
 
 __all__ = [
+    "EmbeddingDimensionMismatchError",
+    "EmbeddingProviderError",
     "MemoryEmbedding",
     "MemoryItem",
     "MemoryItemNotFoundError",
     "MemoryStatus",
     "MemoryType",
+    "backfill_missing",
     "create_memory_item",
+    "embed_memory_item",
     "get_memory_item",
     "list_memory_items_for_project",
 ]

@@ -14,4 +14,21 @@ class MemoryItemNotFoundError(LookupError):
         return f"MemoryItem {self.memory_item_id!r} does not exist."
 
 
-__all__ = ["MemoryItemNotFoundError"]
+class EmbeddingProviderError(RuntimeError):
+    """The embedding provider call failed (network, auth, rate limit)."""
+
+
+class EmbeddingDimensionMismatchError(ValueError):
+    """The provider returned a vector with an unexpected dimension."""
+
+    def __init__(self, expected: int, actual: int) -> None:
+        super().__init__(f"expected dimension {expected}, got {actual}")
+        self.expected = expected
+        self.actual = actual
+
+
+__all__ = [
+    "EmbeddingDimensionMismatchError",
+    "EmbeddingProviderError",
+    "MemoryItemNotFoundError",
+]

@@ -242,6 +242,11 @@ Current variables:
 | `ENVIRONMENT` | API, worker | `development`, `test`, or `production` |
 | `API_BASE_URL` | Web | URL the browser uses to reach the API |
 | `CORS_ALLOW_ORIGINS` | API | Comma-separated list of allowed origins |
+| `FORGE_EMBEDDING_PROVIDER` | API | `fake` (default, CI-safe) or `openai` |
+| `OPENAI_API_KEY` | API | Required only when provider is `openai`; never needed in CI |
+| `FORGE_EMBEDDING_MODEL` | API | Model name (default `text-embedding-3-small`) |
+| `FORGE_EMBEDDING_DIMENSION` | API | Expected dims (default 1536, matches `VECTOR` column) |
+| `FORGE_EMBEDDING_TIMEOUT_SECONDS` | API | HTTP timeout (default 30.0) |
 
 Secrets (LLM provider keys, GitHub tokens, etc.) are **not** introduced in Phase 0. When they are added, they will be required from a secret manager — never committed to the repository.
 

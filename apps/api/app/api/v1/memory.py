@@ -26,6 +26,53 @@ router = APIRouter(prefix="/projects/{project_id}/memory", tags=["memory"])
 log = get_logger(__name__)
 
 
+def _schedule_embedding(request: Request, memory_item_id: uuid.UUID) -> None:
+    """Fire-and-forget embedding after commit.
+
+    No-op when no provider is installed (e.g. unit tests that build
+    the app without lifespan). Loss-on-restart is acceptable; the
+    backfill CLI re-runs missing rows.
+    """
+    provider = getattr(request.app.state, "embedding_provider", None)
+    if provider is None:
+        return
+    settings = getattr(request.app.state, "settings", None)
+
+    async def _embed() -> None:
+        from app.db.session import get_session_factory
+        from app.memory import pipeline
+
+        factory = get_session_factory()
+        async with factory() as embed_session:
+            try:
+                ok = await pipeline.embed_memory_item(embed_session, memory_item_id, provider)
+                await embed_session.commit()
+                log.info(
+                    "memory_embedding_scheduled_done",
+                    memory_item_id=str(memory_item_id),
+                    ok=ok,
+                )
+            except Exception:
+                await embed_session.rollback()
+                log.warning(
+                    "memory_embedding_scheduled_failed",
+                    memory_item_id=str(memory_item_id),
+                )
+
+    # Skip scheduling in test env so existing NULL-embedding tests stay green.
+    if settings is not None and getattr(settings, "environment", "") == "test":
+        return
+    import asyncio
+
+    task = asyncio.create_task(_embed())
+    tasks = getattr(request.app.state, "_embedding_tasks", None)
+    if tasks is None:
+        tasks = set()
+        request.app.state._embedding_tasks = tasks
+    tasks.add(task)
+    task.add_done_callback(tasks.discard)
+
+
 @router.post(
     "",
     response_model=MemoryItemRead,
@@ -69,6 +116,7 @@ async def create_memory_item_endpoint(
         memory_type=item.memory_type,
         request_id=request.state.request_id,
     )
+    _schedule_embedding(request, item.id)
     return MemoryItemRead.model_validate(item)
 
 

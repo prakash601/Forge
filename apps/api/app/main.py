@@ -23,6 +23,7 @@ from app.config import Settings, get_settings
 from app.core.errors import install_exception_handlers
 from app.core.logging import configure_logging, get_logger
 from app.db.session import dispose_engine, get_session_factory, init_engine
+from app.memory.embeddings.registry import get_provider
 from app.orchestrator import Orchestrator, StateAgentRegistry
 
 log = get_logger(__name__)
@@ -52,6 +53,15 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         session_maker=factory,
     )
     app.state.orchestrator = orchestrator
+    # Embedding provider for the memory pipeline (Issue #004). Built
+    # from settings so tests/CI use the fake provider; production
+    # sets FORGE_EMBEDDING_PROVIDER=openai with a key.
+    app.state.embedding_provider = get_provider(
+        provider_name=settings.embedding_provider,
+        api_key=settings.openai_api_key,
+        model=settings.embedding_model,
+        timeout_seconds=settings.embedding_timeout_seconds,
+    )
     log.info(
         "api_started",
         version=__version__,
@@ -63,6 +73,13 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         yield
     finally:
         await orchestrator.shutdown()
+        provider = getattr(app.state, "embedding_provider", None)
+        aclose = getattr(provider, "aclose", None)
+        if callable(aclose):
+            try:
+                await aclose()
+            except Exception as exc:
+                log.warning("embedding_provider_close_failed", error=str(exc))
         await dispose_engine()
         log.info("api_stopped", version=__version__)
 
