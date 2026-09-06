@@ -11,6 +11,8 @@ from typing import Any
 
 import httpx
 
+from app.memory.errors import EmbeddingProviderError
+
 
 class OpenAIEmbeddingProvider:
     """Concrete provider for ``text-embedding-3-small``."""
@@ -39,22 +41,25 @@ class OpenAIEmbeddingProvider:
         if self._api_key:
             headers["Authorization"] = f"Bearer {self._api_key}"
         payload: dict[str, Any] = {"model": self.model, "input": texts}
-        if self._client is not None:
-            response = await self._client.post(
-                "https://api.openai.com/v1/embeddings",
-                json=payload,
-                headers=headers,
-                timeout=self._timeout_seconds,
-            )
-        else:
-            async with httpx.AsyncClient(timeout=self._timeout_seconds) as client:
-                response = await client.post(
+        try:
+            if self._client is not None:
+                response = await self._client.post(
                     "https://api.openai.com/v1/embeddings",
                     json=payload,
                     headers=headers,
                     timeout=self._timeout_seconds,
                 )
-        response.raise_for_status()
+            else:
+                async with httpx.AsyncClient(timeout=self._timeout_seconds) as client:
+                    response = await client.post(
+                        "https://api.openai.com/v1/embeddings",
+                        json=payload,
+                        headers=headers,
+                        timeout=self._timeout_seconds,
+                    )
+            response.raise_for_status()
+        except httpx.HTTPError as exc:
+            raise EmbeddingProviderError(str(exc)) from exc
         data = response.json()
         return [list(item["embedding"]) for item in data["data"]]
 

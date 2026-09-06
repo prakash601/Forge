@@ -66,20 +66,19 @@ async def embed_memory_item(
 
     provider_name = getattr(provider, "name", type(provider).__name__)
     last_error: Exception | None = None
+    last_latency_ms = 0
     for attempt in range(1, max_attempts + 1):
         start = time.perf_counter()
         try:
             vector = await provider.embed(item.content)
-        except EmbeddingDimensionMismatchError:
-            raise
         except Exception as exc:
             last_error = exc
-            latency_ms = int((time.perf_counter() - start) * 1000)
+            last_latency_ms = int((time.perf_counter() - start) * 1000)
             log.warning(
                 "memory_embedding_attempt",
                 memory_item_id=str(item.id),
                 provider=provider_name,
-                latency_ms=latency_ms,
+                latency_ms=last_latency_ms,
                 attempt=attempt,
                 outcome="retry" if attempt < max_attempts else "failed",
             )
@@ -90,7 +89,18 @@ async def embed_memory_item(
             continue
         latency_ms = int((time.perf_counter() - start) * 1000)
         if len(vector) != EXPECTED_DIMENSION:
-            raise EmbeddingDimensionMismatchError(EXPECTED_DIMENSION, len(vector))
+            item.status = MemoryStatus.EMBEDDING_FAILED
+            await session.flush()
+            log.warning(
+                "memory_embedding_attempt",
+                memory_item_id=str(item.id),
+                provider=provider_name,
+                latency_ms=latency_ms,
+                attempt=attempt,
+                outcome="dimension-mismatch",
+                error=str(EmbeddingDimensionMismatchError(EXPECTED_DIMENSION, len(vector))),
+            )
+            return False
         emb_row.embedding = vector
         await session.flush()
         log.info(
@@ -109,7 +119,7 @@ async def embed_memory_item(
         "memory_embedding_attempt",
         memory_item_id=str(item.id),
         provider=provider_name,
-        latency_ms=0,
+        latency_ms=last_latency_ms,
         attempt=max_attempts,
         outcome="final-fail",
         error=str(last_error) if last_error else None,
