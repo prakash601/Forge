@@ -247,6 +247,11 @@ Current variables:
 | `FORGE_EMBEDDING_MODEL` | API | Model name (default `text-embedding-3-small`) |
 | `FORGE_EMBEDDING_DIMENSION` | API | Expected dims (default 1536, matches `VECTOR` column) |
 | `FORGE_EMBEDDING_TIMEOUT_SECONDS` | API | HTTP timeout (default 30.0) |
+| `FORGE_LLM_PROVIDER` | API | `fake` (default, CI-safe) or `openai` |
+| `OPENAI_API_KEY` / `FORGE_OPENAI_API_KEY` | API | Required only when LLM or embedding provider is `openai`; never needed in CI |
+| `FORGE_LLM_MODEL` | API | LLM model name (default `gpt-4o-mini`, `gpt-4o` override allowed) |
+| `FORGE_LLM_TIMEOUT_SECONDS` | API | HTTP timeout for LLM calls (default 30.0) |
+| `FORGE_LLM_MAX_OUTPUT_TOKENS` | API | Default cap on LLM output tokens, cost control (default 1024) |
 
 Secrets (LLM provider keys, GitHub tokens, etc.) are **not** introduced in Phase 0. When they are added, they will be required from a secret manager — never committed to the repository.
 

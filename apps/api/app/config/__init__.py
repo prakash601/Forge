@@ -79,8 +79,10 @@ class Settings(BaseSettings):
     )
     openai_api_key: str | None = Field(
         default=None,
-        validation_alias=AliasChoices("openai_api_key", "OPENAI_API_KEY"),
-        description="OpenAI API key. Required only when embedding_provider=openai.",
+        validation_alias=AliasChoices("openai_api_key", "OPENAI_API_KEY", "FORGE_OPENAI_API_KEY"),
+        description=(
+            "OpenAI API key. Required only when embedding_provider=openai or llm_provider=openai."
+        ),
     )
     embedding_model: str = Field(
         default="text-embedding-3-small",
@@ -100,6 +102,30 @@ class Settings(BaseSettings):
         ),
         gt=0,
         description="HTTP timeout for embedding provider calls.",
+    )
+
+    # ----- LLM (Issue #005) -----
+    llm_provider: str = Field(
+        default="fake",
+        validation_alias=AliasChoices("llm_provider", "FORGE_LLM_PROVIDER"),
+        description="LLM provider name: 'fake' (CI/tests) or 'openai'.",
+    )
+    llm_model: str = Field(
+        default="gpt-4o-mini",
+        validation_alias=AliasChoices("llm_model", "FORGE_LLM_MODEL"),
+        description="LLM model name. Overridable per call ('gpt-4o' allowed).",
+    )
+    llm_timeout_seconds: float = Field(
+        default=30.0,
+        validation_alias=AliasChoices("llm_timeout_seconds", "FORGE_LLM_TIMEOUT_SECONDS"),
+        gt=0,
+        description="HTTP timeout for LLM provider calls.",
+    )
+    llm_max_output_tokens: int = Field(
+        default=1024,
+        validation_alias=AliasChoices("llm_max_output_tokens", "FORGE_LLM_MAX_OUTPUT_TOKENS"),
+        ge=1,
+        description="Default cap on LLM output tokens (cost control).",
     )
 
     @field_validator("cors_allow_origins", mode="before")
