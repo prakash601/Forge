@@ -92,7 +92,7 @@ async def test_fake_refusal_mode_raises_provider_error() -> None:
     from app.llm.fake import FakeLLMProvider
 
     provider = FakeLLMProvider(mode="refusal")
-    with pytest.raises(LLMProviderError, match="[Rr]efus"):
+    with pytest.raises(LLMProviderError, match=r"[Rr]efus"):
         await provider.complete_json("prompt", PlanOutput)
 
 
@@ -126,8 +126,6 @@ def test_openai_provider_default_model_is_gpt_4o_mini() -> None:
 
 
 def _mock_openai_client(payload: dict[str, Any], *, status: int = 200):  # type: ignore[no-untyped-def]
-    import json
-
     import httpx
 
     def handler(request: httpx.Request) -> httpx.Response:
@@ -223,6 +221,7 @@ def test_llm_settings_defaults_and_aliases(monkeypatch: pytest.MonkeyPatch) -> N
 
 async def test_llm_calls_emit_forge_counters() -> None:
     from app.llm import metrics
+    from app.llm.errors import LLMProviderError
     from app.llm.fake import FakeLLMProvider
 
     metrics.reset_counters()
@@ -232,7 +231,7 @@ async def test_llm_calls_emit_forge_counters() -> None:
     assert snapshot.get(("forge_llm_calls_total", "fake", "fake-llm", "success"), 0) == 1
 
     failing = FakeLLMProvider(mode="timeout")
-    with pytest.raises(Exception):
+    with pytest.raises(LLMProviderError):
         await failing.complete_json("prompt", EchoOutput)
     snapshot = metrics.get_counters()
     assert snapshot.get(("forge_llm_calls_total", "fake", "fake-llm", "error"), 0) == 1
