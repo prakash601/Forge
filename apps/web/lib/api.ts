@@ -29,10 +29,67 @@ export class ApiError extends Error {
   }
 }
 
+export type RunState =
+  | "CREATED"
+  | "ANALYZING"
+  | "PLANNING"
+  | "AWAITING_APPROVAL"
+  | "IMPLEMENTING"
+  | "TESTING"
+  | "DEBUGGING"
+  | "REVIEWING"
+  | "COMPLETED"
+  | "FAILED"
+  | "CANCELLED"
+  | "NEEDS_HUMAN";
+
+export interface RunStep {
+  id: string;
+  sequence: number;
+  from_state: RunState;
+  event: string;
+  approved_by: string | null;
+  to_state: RunState;
+  created_at: string;
+}
+
+export interface Run {
+  id: string;
+  state: RunState;
+  is_terminal: boolean;
+  task: string;
+  version: number;
+  created_at: string;
+  updated_at: string;
+  steps: RunStep[];
+}
+
+export interface RunListResponse {
+  runs: Run[];
+  total: number;
+}
+
+export type JsonRecord = Record<string, unknown>;
+
+export interface RunDetails {
+  run: Run;
+  analysis: JsonRecord | null;
+  plan: JsonRecord | null;
+  implementation: JsonRecord | null;
+  test_result: JsonRecord | null;
+  diagnosis: JsonRecord | null;
+  review: JsonRecord | null;
+  memory_candidates: JsonRecord[];
+  approved_by: string | null;
+}
+
 export interface ApiClient {
   baseUrl: string;
   getHealth(): Promise<HealthResponse>;
   getReady(): Promise<ReadyResponse>;
+  listRuns(limit?: number, offset?: number): Promise<RunListResponse>;
+  getRun(runId: string): Promise<Run>;
+  getRunDetails(runId: string): Promise<RunDetails>;
 }
 
 export function createApiClient(baseUrl: string): ApiClient {
@@ -59,5 +116,12 @@ export function createApiClient(baseUrl: string): ApiClient {
     baseUrl: trimmed,
     getHealth: () => get<HealthResponse>("/health"),
     getReady: () => get<ReadyResponse>("/ready"),
+    listRuns: (limit = 20, offset = 0) =>
+      get<RunListResponse>(
+        `/api/v1/runs?limit=${encodeURIComponent(String(limit))}&offset=${encodeURIComponent(String(offset))}`,
+      ),
+    getRun: (runId: string) => get<Run>(`/api/v1/runs/${encodeURIComponent(runId)}`),
+    getRunDetails: (runId: string) =>
+      get<RunDetails>(`/api/v1/runs/${encodeURIComponent(runId)}/details`),
   };
 }
