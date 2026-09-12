@@ -512,6 +512,10 @@ async def manual_approval_app(
     factory = db_session.get_session_factory()
     registry = StateAgentRegistry()
     _wire_test_agents(registry, factory, tmp_path / "workspaces")
+    from app.orchestrator import null_agent as _null_agent
+    from app.runs.enums import RunState as _AwaitState
+
+    registry.register(_AwaitState.AWAITING_APPROVAL, _null_agent)
     orchestrator = Orchestrator(
         driver=registry,
         session_maker=factory,

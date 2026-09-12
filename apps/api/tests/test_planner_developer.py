@@ -304,6 +304,7 @@ async def test_transition_records_approved_by(session: Any) -> None:
     run = await service.transition(session, run.id, "plan_approved", approved_by="policy")
     await session.commit()
     assert run.state.value == "IMPLEMENTING"
+    await session.refresh(run, attribute_names=["steps"])
     steps = list(run.steps)
     approved = [s for s in steps if s.event == "plan_approved"]
     assert len(approved) == 1

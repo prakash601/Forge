@@ -212,6 +212,11 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
         if settings.auto_approve:
             registry.register(RunState.AWAITING_APPROVAL, PolicyAutoApproveAgent())
+        else:
+            # Neutralize the stub mapping: a waiting run must not approve itself.
+            from app.orchestrator import null_agent
+
+            registry.register(RunState.AWAITING_APPROVAL, null_agent)
     except Exception as exc:
         log.warning("agents_wire_failed", error=str(exc))
     orchestrator = Orchestrator(
