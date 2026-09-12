@@ -92,7 +92,15 @@ __all__ = [
     "ACCEPTED_EVENTS",
     "RunCreateRequest",
     "RunEventRequest",
+    "RunList",
     "RunRead",
     "RunStepRead",
     "event_choices",
 ]
+
+
+class RunList(BaseModel):
+    """Newest-first run listing for the dashboard."""
+
+    runs: list[RunRead] = Field(default_factory=list)
+    total: int = Field(default=0, ge=0)

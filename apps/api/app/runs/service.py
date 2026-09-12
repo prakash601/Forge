@@ -35,7 +35,7 @@ from __future__ import annotations
 import uuid
 from datetime import UTC, datetime
 
-from sqlalchemy import select, update
+from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.runs.enums import RunEvent, RunState, is_terminal_state
@@ -209,3 +209,25 @@ async def transition(
 
 
 __all__ = ["create_run", "get_run", "transition"]
+
+
+async def list_runs(
+    session: AsyncSession, *, limit: int = 20, offset: int = 0
+) -> tuple[list[Run], int]:
+    """List runs newest-first with total count (dashboard foundation)."""
+    bounded_limit = min(max(1, limit), 100)
+    bounded_offset = max(0, offset)
+    total = (await session.execute(select(func.count()).select_from(Run))).scalar_one()
+    rows = (
+        (
+            await session.execute(
+                select(Run)
+                .order_by(Run.created_at.desc())
+                .limit(bounded_limit)
+                .offset(bounded_offset)
+            )
+        )
+        .scalars()
+        .all()
+    )
+    return list(rows), total
