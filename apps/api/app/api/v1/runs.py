@@ -21,18 +21,22 @@ referring to it as a string under ``from __future__ import annotations``
 breaks dependency introspection in some FastAPI versions.
 """
 
+import asyncio
 import uuid
+from collections.abc import AsyncIterator
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, HTTPException, Path, Request, status
+from fastapi import APIRouter, Depends, HTTPException, Path, Query, Request, status
+from fastapi.responses import StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.errors import error_payload
 from app.core.logging import get_logger
-from app.db.session import get_session
+from app.db.session import get_session, get_session_factory
 from app.orchestrator.orchestrator import Orchestrator
 from app.runs import service
-from app.runs.enums import RunState
+from app.runs.details import RunDetails, get_run_details
+from app.runs.enums import RunState, is_terminal_state
 from app.runs.errors import (
     InvalidTransitionError,
     RunNotFoundError,
@@ -42,7 +46,9 @@ from app.runs.errors import (
 from app.runs.schemas import (
     RunCreateRequest,
     RunEventRequest,
+    RunList,
     RunRead,
+    RunStepRead,
 )
 
 router = APIRouter(prefix="/runs", tags=["runs"])
@@ -226,3 +232,143 @@ async def read_run_endpoint(
 # Re-exported so other modules (and tests) can import without reaching
 # into a private name.
 __all__ = ["error_payload", "router"]
+
+
+@router.get(
+    "",
+    response_model=RunList,
+    status_code=status.HTTP_200_OK,
+    summary="List runs newest-first (dashboard foundation).",
+)
+async def list_runs_endpoint(
+    request: Request,
+    session: Annotated[AsyncSession, Depends(get_session)],
+    limit: Annotated[int, Query(ge=1, le=100)] = 20,
+    offset: Annotated[int, Query(ge=0)] = 0,
+) -> RunList:
+    runs, total = await service.list_runs(session, limit=limit, offset=offset)
+    return RunList(runs=[RunRead.model_validate(run) for run in runs], total=total)
+
+
+@router.get(
+    "/{run_id}/details",
+    response_model=RunDetails,
+    status_code=status.HTTP_200_OK,
+    summary="Composite dashboard read for one run.",
+    responses={404: {"description": "Run does not exist."}},
+)
+async def read_run_details_endpoint(
+    request: Request,
+    session: Annotated[AsyncSession, Depends(get_session)],
+    run_id: Annotated[uuid.UUID, Path(description="Run identifier (UUID).")],
+) -> RunDetails:
+    request_id: str = request.state.request_id
+    try:
+        return await get_run_details(session, run_id)
+    except RunNotFoundError as exc:
+        await session.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail={
+                "code": "RESOURCE_NOT_FOUND",
+                "message": str(exc),
+                "request_id": request_id,
+            },
+        ) from exc
+
+
+@router.get(
+    "/{run_id}/stream",
+    status_code=status.HTTP_200_OK,
+    summary="Server-sent-events timeline for one run (closes on terminal state).",
+    responses={404: {"description": "Run does not exist."}},
+)
+async def stream_run_endpoint(
+    request: Request,
+    session: Annotated[AsyncSession, Depends(get_session)],
+    run_id: Annotated[uuid.UUID, Path(description="Run identifier (UUID).")],
+) -> StreamingResponse:
+    request_id: str = request.state.request_id
+    try:
+        await service.get_run(session, run_id)
+    except RunNotFoundError as exc:
+        await session.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail={
+                "code": "RESOURCE_NOT_FOUND",
+                "message": str(exc),
+                "request_id": request_id,
+            },
+        ) from exc
+    return StreamingResponse(
+        _run_events(run_id=run_id, request_id=request_id),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+
+
+def _sse(event: str, data: object) -> str:
+    import json as _json
+
+    return f"event: {event}\ndata: {_json.dumps(data)}\n\n"
+
+
+async def _run_events(
+    *,
+    run_id: uuid.UUID,
+    request_id: str,
+    poll_s: float = 0.1,
+    heartbeat_s: float = 10.0,
+) -> AsyncIterator[str]:
+    """Yield SSE frames until the run terminates or disappears.
+
+    Snapshot on connect, then one frame per observed change. Polling
+    (rather than LISTEN/NOTIFY) keeps this working on any Postgres
+    without extra extensions; step delivery is sequence-based so no
+    step is ever skipped even if states coalesce between polls.
+    """
+    factory = get_session_factory()
+    loop = asyncio.get_event_loop()
+    last_state: RunState | None = None
+    last_sequence = 0
+    last_beat = loop.time()
+    while True:
+        session = factory()
+        try:
+            try:
+                run = await service.get_run(session, run_id)
+            except RunNotFoundError:
+                yield _sse("error", {"code": "RESOURCE_NOT_FOUND"})
+                return
+            await session.refresh(run, attribute_names=["steps"])
+            if last_state is None:
+                yield _sse("snapshot", RunRead.model_validate(run).model_dump(mode="json"))
+            else:
+                if run.state != last_state:
+                    yield _sse(
+                        "state_changed",
+                        {"state": run.state.value, "version": run.version},
+                    )
+                for step in run.steps:
+                    if step.sequence > last_sequence:
+                        yield _sse(
+                            "step_added",
+                            RunStepRead.model_validate(step).model_dump(mode="json"),
+                        )
+            last_state = run.state
+            last_sequence = max([step.sequence for step in run.steps] + [last_sequence])
+            if is_terminal_state(run.state):
+                log.info(
+                    "run_stream_closed",
+                    run_id=str(run_id),
+                    final_state=run.state.value,
+                    request_id=request_id,
+                )
+                return
+        finally:
+            await session.close()
+        if loop.time() - last_beat >= heartbeat_s:
+            yield ": ping\n\n"
+            last_beat = loop.time()
+        await asyncio.sleep(poll_s)
