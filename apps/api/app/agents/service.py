@@ -269,7 +269,5 @@ async def get_latest_memory(session: AsyncSession) -> RunMemory | None:
     """Most recent outcome candidates across runs (next-run memory)."""
     from sqlalchemy import desc
 
-    result = await session.execute(
-        select(RunMemory).order_by(desc(RunMemory.created_at)).limit(1)
-    )
+    result = await session.execute(select(RunMemory).order_by(desc(RunMemory.created_at)).limit(1))
     return result.scalars().first()

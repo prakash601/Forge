@@ -104,9 +104,7 @@ class ReviewerAgent:
         self._model = model
         self._max_retries = max(1, max_retries)
 
-    def _prompt(
-        self, task: str, plan: Plan | None, report: TestReport | None, diff: str
-    ) -> str:
+    def _prompt(self, task: str, plan: Plan | None, report: TestReport | None, diff: str) -> str:
         plan_text = (
             f"goal={plan.goal} files={plan.files_to_change + plan.files_to_add}"
             if plan is not None
@@ -152,9 +150,7 @@ class ReviewerAgent:
             diff = ""
         try:
             changed = [
-                line.split()[-1]
-                for line in diff.splitlines()
-                if line.startswith("diff --git")
+                line.split()[-1] for line in diff.splitlines() if line.startswith("diff --git")
             ]
         except Exception:
             changed = []

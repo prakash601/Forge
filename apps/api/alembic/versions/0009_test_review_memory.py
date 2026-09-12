@@ -19,7 +19,8 @@ branch_labels = None
 depends_on = None
 
 
-_SQL_FILE = Path(__file__).resolve().parents[4] / "db" / "migrations" / "0009_test_review_memory.sql"
+_MIGRATIONS = Path(__file__).resolve().parents[4] / "db" / "migrations"
+_SQL_FILE = _MIGRATIONS / "0009_test_review_memory.sql"
 
 
 def upgrade() -> None:
