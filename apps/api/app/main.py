@@ -56,9 +56,11 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         from pathlib import Path as _Path
 
         from app.agents.archaeologist import ArchaeologistAgent
+        from app.agents.debugger import DebuggerAgent
         from app.agents.developer import DeveloperAgent
         from app.agents.planner import PlannerAgent
         from app.agents.policy import PolicyAutoApproveAgent
+        from app.agents.reviewer import ReviewerAgent
         from app.agents.service import (
             get_analysis,
             get_plan,
@@ -66,6 +68,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             save_implementation,
             save_plan,
         )
+        from app.agents.tester import TesterAgent
         from app.agents.workspace import WorkspaceManager
         from app.llm.registry import get_llm_provider
 
@@ -98,10 +101,29 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             finally:
                 await session.close()
 
+        async def _load_memory() -> list[str]:
+            from app.agents.service import get_latest_memory
+
+            session = factory()
+            try:
+                row = await get_latest_memory(session)
+                if row is None:
+                    return []
+                return [
+                    f"{c.get('memory_type', 'NOTE')}: {c.get('content', '')}"
+                    for c in row.candidates
+                    if isinstance(c, dict)
+                ]
+            except Exception:
+                return []
+            finally:
+                await session.close()
+
         _archaeologist = ArchaeologistAgent(
             llm=_llm,
             repo_root=_Path(settings.fixture_repo_path),
             save_fn=_save_analysis,
+            memory_reader=_load_memory,
             model=settings.llm_model,
         )
         registry.register(RunState.ANALYZING, _archaeologist)
@@ -200,15 +222,170 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             root=_Path(settings.workspace_root),
             fixture_dir=_Path(settings.fixture_repo_path),
         )
+
+        async def _load_diagnosis(*, run_id: object) -> object:
+            import uuid as _uuid
+
+            from app.agents.schemas import DebuggerDiagnosis as _Diagnosis
+            from app.agents.service import get_diagnosis
+
+            _rid = run_id if isinstance(run_id, _uuid.UUID) else _uuid.UUID(str(run_id))
+            session = factory()
+            try:
+                row = await get_diagnosis(session, _rid)
+                if row is None:
+                    return None
+                return _Diagnosis.model_validate(row.diagnosis)
+            finally:
+                await session.close()
+
         _developer = DeveloperAgent(
             llm=_llm,
             workspaces=_workspaces,
             save_fn=_save_implementation,
             plan_provider=_load_plan,
+            diagnosis_provider=_load_diagnosis,
             model=settings.llm_model,
         )
         registry.register(RunState.IMPLEMENTING, _developer)
         app.state.developer = _developer
+
+        async def _save_test_result(*, run_id: object, result: object, **kwargs: object) -> None:
+            import uuid as _uuid
+
+            from app.agents.schemas import TestReport as _Report
+            from app.agents.service import save_test_result
+
+            _rid = run_id if isinstance(run_id, _uuid.UUID) else _uuid.UUID(str(run_id))
+            assert isinstance(result, _Report)
+            session = factory()
+            try:
+                await save_test_result(
+                    session,
+                    run_id=_rid,
+                    result=result,
+                    provider=str(kwargs.get("provider", "unknown")),
+                    model=str(kwargs.get("model", "unknown")),
+                )
+                await session.commit()
+            except Exception:
+                await session.rollback()
+                raise
+            finally:
+                await session.close()
+
+        async def _load_test_report(*, run_id: object) -> object:
+            import uuid as _uuid
+
+            from app.agents.schemas import TestReport as _Report
+            from app.agents.service import get_test_result
+
+            _rid = run_id if isinstance(run_id, _uuid.UUID) else _uuid.UUID(str(run_id))
+            session = factory()
+            try:
+                row = await get_test_result(session, _rid)
+                if row is None:
+                    return None
+                return _Report.model_validate(row.result)
+            finally:
+                await session.close()
+
+        _tester = TesterAgent(
+            llm=_llm,
+            workspaces=_workspaces,
+            save_fn=_save_test_result,
+            model=settings.llm_model,
+            timeout_seconds=settings.test_timeout_seconds,
+        )
+        registry.register(RunState.TESTING, _tester)
+        app.state.tester = _tester
+
+        async def _save_diagnosis(*, run_id: object, diagnosis: object, **kwargs: object) -> None:
+            import uuid as _uuid
+
+            from app.agents.schemas import DebuggerDiagnosis as _Diagnosis
+            from app.agents.service import save_diagnosis
+
+            _rid = run_id if isinstance(run_id, _uuid.UUID) else _uuid.UUID(str(run_id))
+            assert isinstance(diagnosis, _Diagnosis)
+            session = factory()
+            try:
+                await save_diagnosis(
+                    session,
+                    run_id=_rid,
+                    diagnosis=diagnosis,
+                    provider=str(kwargs.get("provider", "unknown")),
+                    model=str(kwargs.get("model", "unknown")),
+                )
+                await session.commit()
+            except Exception:
+                await session.rollback()
+                raise
+            finally:
+                await session.close()
+
+        _debugger = DebuggerAgent(
+            llm=_llm,
+            workspaces=_workspaces,
+            save_fn=_save_diagnosis,
+            test_result_provider=_load_test_report,
+            model=settings.llm_model,
+        )
+        registry.register(RunState.DEBUGGING, _debugger)
+        app.state.debugger = _debugger
+
+        async def _save_review(*, run_id: object, review: object, **kwargs: object) -> None:
+            import uuid as _uuid
+
+            from app.agents.schemas import ReviewDecision as _Decision
+            from app.agents.service import save_review
+
+            _rid = run_id if isinstance(run_id, _uuid.UUID) else _uuid.UUID(str(run_id))
+            assert isinstance(review, _Decision)
+            session = factory()
+            try:
+                await save_review(
+                    session,
+                    run_id=_rid,
+                    review=review,
+                    provider=str(kwargs.get("provider", "unknown")),
+                    model=str(kwargs.get("model", "unknown")),
+                )
+                await session.commit()
+            except Exception:
+                await session.rollback()
+                raise
+            finally:
+                await session.close()
+
+        async def _save_memory(*, run_id: object, candidates: object) -> None:
+            import uuid as _uuid
+
+            from app.agents.service import save_memory
+
+            _rid = run_id if isinstance(run_id, _uuid.UUID) else _uuid.UUID(str(run_id))
+            assert isinstance(candidates, list)
+            session = factory()
+            try:
+                await save_memory(session, run_id=_rid, candidates=candidates)
+                await session.commit()
+            except Exception:
+                await session.rollback()
+                raise
+            finally:
+                await session.close()
+
+        _reviewer = ReviewerAgent(
+            llm=_llm,
+            workspaces=_workspaces,
+            save_fn=_save_review,
+            memory_fn=_save_memory,
+            plan_provider=_load_plan,
+            test_result_provider=_load_test_report,
+            model=settings.llm_model,
+        )
+        registry.register(RunState.REVIEWING, _reviewer)
+        app.state.reviewer = _reviewer
 
         if settings.auto_approve:
             registry.register(RunState.AWAITING_APPROVAL, PolicyAutoApproveAgent())

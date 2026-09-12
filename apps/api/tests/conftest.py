@@ -132,7 +132,8 @@ async def _truncate_all(engine: AsyncEngine) -> None:
     async with engine.connect() as conn:
         await conn.execute(
             text(
-                "TRUNCATE TABLE run_implementations, run_plans, run_analyses, memory_embeddings, "
+                "TRUNCATE TABLE run_memories, run_reviews, run_diagnoses, run_test_results, "
+                "run_implementations, run_plans, run_analyses, memory_embeddings, "
                 "memory_items, projects, users, run_steps, runs RESTART IDENTITY CASCADE"
             )
         )
@@ -395,6 +396,101 @@ def _wire_test_agents(registry: Any, factory: Any, workspace_root: Path) -> None
         finally:
             await sess.close()
 
+    from app.agents.service import (
+        get_diagnosis,
+        get_test_result,
+        save_diagnosis,
+        save_memory,
+        save_review,
+        save_test_result,
+    )
+
+    async def _save_test(*, run_id: object, result: object, **kwargs: Any) -> None:
+        from app.agents.schemas import TestReport as _Report
+
+        assert isinstance(result, _Report)
+        _rid = run_id if isinstance(run_id, _uuid.UUID) else _uuid.UUID(str(run_id))
+        sess = factory()
+        try:
+            await save_test_result(
+                sess,
+                run_id=_rid,
+                result=result,
+                provider=str(kwargs.get("provider", "fake")),
+                model=str(kwargs.get("model", "fake-llm")),
+            )
+            await _commit(sess)
+        finally:
+            await sess.close()
+
+    async def _save_diag(*, run_id: object, diagnosis: object, **kwargs: Any) -> None:
+        from app.agents.schemas import DebuggerDiagnosis as _Diagnosis
+
+        assert isinstance(diagnosis, _Diagnosis)
+        _rid = run_id if isinstance(run_id, _uuid.UUID) else _uuid.UUID(str(run_id))
+        sess = factory()
+        try:
+            await save_diagnosis(
+                sess,
+                run_id=_rid,
+                diagnosis=diagnosis,
+                provider=str(kwargs.get("provider", "fake")),
+                model=str(kwargs.get("model", "fake-llm")),
+            )
+            await _commit(sess)
+        finally:
+            await sess.close()
+
+    async def _save_review(*, run_id: object, review: object, **kwargs: Any) -> None:
+        from app.agents.schemas import ReviewDecision as _Decision
+
+        assert isinstance(review, _Decision)
+        _rid = run_id if isinstance(run_id, _uuid.UUID) else _uuid.UUID(str(run_id))
+        sess = factory()
+        try:
+            await save_review(
+                sess,
+                run_id=_rid,
+                review=review,
+                provider=str(kwargs.get("provider", "fake")),
+                model=str(kwargs.get("model", "fake-llm")),
+            )
+            await _commit(sess)
+        finally:
+            await sess.close()
+
+    async def _save_mem(*, run_id: object, candidates: object, **kwargs: Any) -> None:
+        assert isinstance(candidates, list)
+        _rid = run_id if isinstance(run_id, _uuid.UUID) else _uuid.UUID(str(run_id))
+        sess = factory()
+        try:
+            await save_memory(sess, run_id=_rid, candidates=candidates)
+            await _commit(sess)
+        finally:
+            await sess.close()
+
+    async def _load_report(*, run_id: object, **kwargs: Any) -> Any:
+        from app.agents.schemas import TestReport as _Report
+
+        _rid = run_id if isinstance(run_id, _uuid.UUID) else _uuid.UUID(str(run_id))
+        sess = factory()
+        try:
+            row = await get_test_result(sess, _rid)
+            return _Report.model_validate(row.result) if row is not None else None
+        finally:
+            await sess.close()
+
+    async def _load_diag(*, run_id: object, **kwargs: Any) -> Any:
+        from app.agents.schemas import DebuggerDiagnosis as _Diagnosis
+
+        _rid = run_id if isinstance(run_id, _uuid.UUID) else _uuid.UUID(str(run_id))
+        sess = factory()
+        try:
+            row = await get_diagnosis(sess, _rid)
+            return _Diagnosis.model_validate(row.diagnosis) if row is not None else None
+        finally:
+            await sess.close()
+
     old_text, new_text = _pagination_edit_pair()
     registry.register(
         _RunState.ANALYZING,
@@ -448,6 +544,70 @@ def _wire_test_agents(registry: Any, factory: Any, workspace_root: Path) -> None
             workspaces=WorkspaceManager(root=workspace_root, fixture_dir=FIXTURE_ROOT),
             save_fn=_save_impl,
             plan_provider=_load_plan,
+            diagnosis_provider=_load_diag,
+        ),
+    )
+    from app.agents.debugger import DebuggerAgent
+    from app.agents.reviewer import ReviewerAgent
+    from app.agents.tester import TesterAgent
+
+    _workspaces = WorkspaceManager(root=workspace_root, fixture_dir=FIXTURE_ROOT)
+    registry.register(
+        _RunState.TESTING,
+        TesterAgent(
+            llm=FakeLLMProvider(
+                agent_type="tester",
+                canned={
+                    "tester": {
+                        "commands": [
+                            "python -m pytest tests -q --tb=short -rf -p no:cacheprovider"
+                        ],
+                        "framework": "pytest",
+                    }
+                },
+            ),
+            workspaces=_workspaces,
+            save_fn=_save_test,
+        ),
+    )
+    registry.register(
+        _RunState.DEBUGGING,
+        DebuggerAgent(
+            llm=FakeLLMProvider(
+                agent_type="debugger",
+                canned={
+                    "debugger": {
+                        "root_cause": "Pagination slice is off by one.",
+                        "evidence": ["tests -q output"],
+                        "fix_strategy": "Adjust the slice bounds and re-run.",
+                        "confidence": 0.8,
+                    }
+                },
+            ),
+            workspaces=_workspaces,
+            save_fn=_save_diag,
+            test_result_provider=_load_report,
+        ),
+    )
+    registry.register(
+        _RunState.REVIEWING,
+        ReviewerAgent(
+            llm=FakeLLMProvider(
+                agent_type="reviewer",
+                canned={
+                    "reviewer": {
+                        "decision": "APPROVE",
+                        "summary": "Minimal pagination change with passing tests.",
+                        "findings": ["limit/offset slice in list_todos"],
+                        "blocking_findings": [],
+                    }
+                },
+            ),
+            workspaces=_workspaces,
+            save_fn=_save_review,
+            memory_fn=_save_mem,
+            plan_provider=_load_plan,
+            test_result_provider=_load_report,
         ),
     )
 

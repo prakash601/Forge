@@ -30,11 +30,16 @@ class ArchaeologistFindings(BaseModel):
 
 __all__ = [
     "ArchaeologistFindings",
+    "DebuggerDiagnosis",
     "DeveloperProposal",
     "DeveloperResult",
     "FileEdit",
+    "MemoryCandidate",
     "Plan",
     "PlanStep",
+    "ReviewDecision",
+    "TestReport",
+    "TestSpec",
 ]
 
 
@@ -91,3 +96,46 @@ class DeveloperResult(BaseModel):
     implementation_notes: list[str] = Field(default_factory=list)
     validation: list[str] = Field(default_factory=list)
     remaining_risks: list[str] = Field(default_factory=list)
+
+
+class TestSpec(BaseModel):
+    """LLM-proposed validation commands for the Tester."""
+
+    commands: list[str] = Field(default_factory=list)
+    framework: str = ""
+
+
+class TestReport(BaseModel):
+    """Tester outcome (AGENT_CONTRACTS §9)."""
+
+    status: str = Field(default="PASS")
+    commands: list[str] = Field(default_factory=list)
+    passed: int = Field(default=0, ge=0)
+    failed: int = Field(default=0, ge=0)
+    skipped: int = Field(default=0, ge=0)
+    failures: list[str] = Field(default_factory=list)
+
+
+class DebuggerDiagnosis(BaseModel):
+    """Debugger outcome (AGENT_CONTRACTS §10)."""
+
+    root_cause: str = Field(min_length=1)
+    evidence: list[str] = Field(default_factory=list)
+    fix_strategy: str = Field(min_length=1)
+    confidence: float = Field(default=0.5, ge=0.0, le=1.0)
+
+
+class ReviewDecision(BaseModel):
+    """Reviewer outcome (AGENT_CONTRACTS §11)."""
+
+    decision: str = Field(default="APPROVE")
+    summary: str = Field(min_length=1)
+    findings: list[str] = Field(default_factory=list)
+    blocking_findings: list[str] = Field(default_factory=list)
+
+
+class MemoryCandidate(BaseModel):
+    """One outcome candidate for project memory."""
+
+    memory_type: str = Field(min_length=1)
+    content: str = Field(min_length=1)

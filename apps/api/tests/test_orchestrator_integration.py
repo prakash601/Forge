@@ -25,30 +25,29 @@ from app.orchestrator import Orchestrator
 from app.runs.enums import RunState
 
 # ---------------------------------------------------------------------------
-# End-to-end: Phase 2 loop walks CREATED -> ... -> TESTING.
+# End-to-end: Phase 2 loop walks CREATED -> ... -> COMPLETED.
 # ---------------------------------------------------------------------------
 
 
-async def test_create_run_drives_loop_to_testing(
+async def test_create_run_drives_loop_to_completed(
     orchestrator_app: tuple[AsyncClient, Orchestrator],
 ) -> None:
-    """A bare POST /api/v1/runs should reach TESTING via the real agents.
+    """A bare POST /api/v1/runs should reach COMPLETED via the real agents.
 
-    CREATED still uses the stub (repository_ready); ANALYZING runs the
-    Archaeologist, PLANNING the planner, AWAITING_APPROVAL the policy
-    auto-approver, and IMPLEMENTING the Developer. TESTING has no agent
-    until #009, so the run parks there.
+    CREATED still uses the stub (repository_ready); every later state
+    runs its Phase 2 agent through REVIEWING. (The pagination-specific
+    exit criteria live in test_e2e_pagination.py.)
     """
     client, orchestrator = orchestrator_app
 
-    response = await client.post("/api/v1/runs", json={"task": "add pagination to /todos"})
+    response = await client.post("/api/v1/runs", json={"task": "smoke test for orchestrator"})
     assert response.status_code == 201, response.text
     run_id = response.json()["id"]
 
-    final = await _wait_for_state(client, run_id, {"TESTING"}, timeout_s=15.0)
+    final = await _wait_for_state(client, run_id, {"COMPLETED"}, timeout_s=60.0)
     body = final.json()
-    assert body["state"] == "TESTING"
-    assert body["is_terminal"] is False
+    assert body["state"] == "COMPLETED"
+    assert body["is_terminal"] is True
     events = [step["event"] for step in body["steps"]]
     assert events == [
         "repository_ready",
@@ -56,12 +55,14 @@ async def test_create_run_drives_loop_to_testing(
         "plan_ready",
         "plan_approved",
         "implementation_complete",
+        "tests_passed",
+        "review_passed",
     ]
     # Policy auto-approval is audited on the step.
     approved = [step for step in body["steps"] if step["event"] == "plan_approved"]
     assert len(approved) == 1
     assert approved[0]["approved_by"] == "policy"
-    # After the run parks, no orchestrator task should remain.
+    # After the run terminates, no orchestrator task should remain.
     assert orchestrator.runtime.outstanding() == 0
 
 
@@ -87,15 +88,14 @@ async def test_external_event_application_drives_orchestrator(
 ) -> None:
     """Manually applying an event for a parked run advances it."""
     client, _orchestrator = orchestrator_app
-    # First create + wait for the loop to park in TESTING.
+    # First create + wait for the loop to terminate.
     create = await client.post("/api/v1/runs", json={"task": "manual event"})
     assert create.status_code == 201
     run_id = create.json()["id"]
-    await _wait_for_state(client, run_id, {"TESTING"}, timeout_s=15.0)
-    # TESTING has no agent yet (#009); a manual tests_passed moves the run on.
-    response = await client.post(f"/api/v1/runs/{run_id}/events", json={"event": "tests_passed"})
-    assert response.status_code == 200, response.text
-    assert response.json()["state"] == "REVIEWING"
+    await _wait_for_state(client, run_id, {"COMPLETED"}, timeout_s=60.0)
+    # Applying an event to a terminal run returns 409 (per Issue #001).
+    response = await client.post(f"/api/v1/runs/{run_id}/events", json={"event": "cancel"})
+    assert response.status_code == 409
 
 
 # ---------------------------------------------------------------------------
