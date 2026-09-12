@@ -1,6 +1,7 @@
 import Link from "next/link";
 
 import { createApiClient, type ReadyResponse, type Run } from "@/lib/api";
+import { NewRunForm } from "@/components/NewRunForm";
 import { StateBadge } from "@/components/RunLive";
 
 interface HomePageProps {
@@ -52,6 +53,11 @@ export default async function Home({ searchParams }: HomePageProps) {
         <span className="indicator" />
         <span>{statusText}</span>
       </div>
+
+      <section className="panel">
+        <h2>New run</h2>
+        <NewRunForm apiBaseUrl={baseUrl} />
+      </section>
 
       <section className="panel runs">
         <h2>Runs{listing ? ` (${listing.total})` : ""}</h2>

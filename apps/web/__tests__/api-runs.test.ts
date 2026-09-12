@@ -66,6 +66,21 @@ describe("ApiClient runs reads", () => {
     expect(result).toEqual({ id: "r1", state: "IMPLEMENTING" });
   });
 
+  it("creates a run with the task body", async () => {
+    const mock = vi.mocked(global.fetch).mockResolvedValueOnce(
+      new Response(JSON.stringify({ id: "r2", state: "CREATED" }), { status: 201 }),
+    );
+    const result = await createApiClient("http://api").createRun("do the thing");
+    expect(mock).toHaveBeenCalledWith(
+      "http://api/api/v1/runs",
+      expect.objectContaining({
+        method: "POST",
+        body: JSON.stringify({ task: "do the thing" }),
+      }),
+    );
+    expect(result).toEqual({ id: "r2", state: "CREATED" });
+  });
+
   it("raises ApiError with the status for run reads", async () => {
     vi.mocked(global.fetch).mockResolvedValueOnce(new Response("missing", { status: 404 }));
     await expect(createApiClient("http://api").getRun("nope")).rejects.toMatchObject({
