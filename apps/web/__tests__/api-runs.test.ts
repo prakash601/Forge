@@ -51,6 +51,21 @@ describe("ApiClient runs reads", () => {
     );
   });
 
+  it("posts approval events with a JSON body", async () => {
+    const mock = vi.mocked(global.fetch).mockResolvedValueOnce(
+      new Response(JSON.stringify({ id: "r1", state: "IMPLEMENTING" }), { status: 200 }),
+    );
+    const result = await createApiClient("http://api").applyEvent("r1", "plan_approved");
+    expect(mock).toHaveBeenCalledWith(
+      "http://api/api/v1/runs/r1/events",
+      expect.objectContaining({
+        method: "POST",
+        body: JSON.stringify({ event: "plan_approved" }),
+      }),
+    );
+    expect(result).toEqual({ id: "r1", state: "IMPLEMENTING" });
+  });
+
   it("raises ApiError with the status for run reads", async () => {
     vi.mocked(global.fetch).mockResolvedValueOnce(new Response("missing", { status: 404 }));
     await expect(createApiClient("http://api").getRun("nope")).rejects.toMatchObject({

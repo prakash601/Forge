@@ -318,3 +318,53 @@ main.dashboard h1 {
   max-height: 24rem;
   font-size: 0.75rem;
 }
+
+/* ----- Approval (Phase 3, #012) ----- */
+
+.approval {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+  align-items: center;
+  margin-top: 1rem;
+}
+
+.approval .muted {
+  width: 100%;
+  font-size: 0.875rem;
+  margin: 0;
+}
+
+.btn {
+  padding: 0.625rem 1.25rem;
+  border-radius: 0.5rem;
+  font-size: 0.875rem;
+  font-weight: 600;
+  cursor: pointer;
+  border: 1px solid var(--forge-border);
+  background: #1a1a1a;
+  color: var(--forge-fg);
+}
+
+.btn:disabled {
+  opacity: 0.6;
+  cursor: wait;
+}
+
+.btn.primary {
+  background: var(--forge-accent);
+  border-color: var(--forge-accent);
+  color: #ffffff;
+}
+
+.btn.danger {
+  border-color: var(--forge-error);
+  color: var(--forge-error);
+}
+
+.error {
+  color: var(--forge-error);
+  font-size: 0.875rem;
+  width: 100%;
+  margin: 0;
+}
