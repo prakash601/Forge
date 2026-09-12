@@ -8,6 +8,7 @@ import {
   type RunDetails,
   type RunState,
 } from "@/lib/api";
+import { InterventionPanel } from "./InterventionPanel";
 import { PlanApproval } from "./PlanApproval";
 import { subscribeToRun } from "@/lib/stream";
 
@@ -75,6 +76,8 @@ export function RunDetail({
         </div>
         <StateBadge state={run.state} />
       </header>
+
+      <InterventionPanel details={details} />
 
       <Section title="Timeline">
         {run.steps.length === 0 ? (
