@@ -25,6 +25,7 @@ from app.core.logging import configure_logging, get_logger
 from app.db.session import dispose_engine, get_session_factory, init_engine
 from app.memory.embeddings.registry import get_provider
 from app.orchestrator import Orchestrator, StateAgentRegistry
+from app.runs.enums import RunState
 
 log = get_logger(__name__)
 
@@ -48,8 +49,59 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     configure_logging(settings)
     init_engine(settings)
     factory = get_session_factory()
+    registry = StateAgentRegistry()
+    # Issue #007: wire the real Archaeologist for ANALYZING. The stub
+    # remains registered for CREATED/PLANNING/AWAITING_APPROVAL/
+    # IMPLEMENTING so the rest of the loop still walks in Phase 2.
+    try:
+        from pathlib import Path as _Path
+
+        from app.agents.archaeologist import ArchaeologistAgent
+        from app.agents.service import save_analysis
+        from app.llm.registry import get_llm_provider
+
+        _llm = get_llm_provider(
+            provider_name=settings.llm_provider,
+            api_key=settings.openai_api_key,
+            model=settings.llm_model,
+            max_output_tokens=settings.llm_max_output_tokens,
+            timeout_seconds=settings.llm_timeout_seconds,
+        )
+
+        async def _save_analysis(
+            *, run_id: object, findings: object, provider: str, model: str
+        ) -> None:
+            import uuid as _uuid
+
+            from app.agents.schemas import ArchaeologistFindings as _Findings
+
+            _rid = run_id if isinstance(run_id, _uuid.UUID) else _uuid.UUID(str(run_id))
+            assert isinstance(findings, _Findings)
+            session = factory()
+            try:
+                await save_analysis(
+                    session, run_id=_rid, findings=findings, provider=provider, model=model
+                )
+                await session.commit()
+            except Exception:
+                await session.rollback()
+                raise
+            finally:
+                await session.close()
+
+        _archaeologist = ArchaeologistAgent(
+            llm=_llm,
+            repo_root=_Path(settings.fixture_repo_path),
+            save_fn=_save_analysis,
+            model=settings.llm_model,
+        )
+        registry.register(RunState.ANALYZING, _archaeologist)
+        app.state.archaeologist = _archaeologist
+        app.state.llm_provider = _llm
+    except Exception as exc:
+        log.warning("archaeologist_wire_failed", error=str(exc))
     orchestrator = Orchestrator(
-        driver=StateAgentRegistry(),
+        driver=registry,
         session_maker=factory,
     )
     app.state.orchestrator = orchestrator

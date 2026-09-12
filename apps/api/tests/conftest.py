@@ -132,7 +132,7 @@ async def _truncate_all(engine: AsyncEngine) -> None:
     async with engine.connect() as conn:
         await conn.execute(
             text(
-                "TRUNCATE TABLE memory_embeddings, memory_items, projects, users, "
+                "TRUNCATE TABLE run_analyses, memory_embeddings, memory_items, projects, users, "
                 "run_steps, runs RESTART IDENTITY CASCADE"
             )
         )
@@ -287,8 +287,41 @@ async def orchestrator_app(
     db_session.init_engine(app_settings)
     app = create_app(app_settings)
     factory = db_session.get_session_factory()
+    from pathlib import Path as _Path
+
+    from app.agents.archaeologist import ArchaeologistAgent
+    from app.agents.service import save_analysis
+    from app.llm.fake import FakeLLMProvider
+    from app.runs.enums import RunState as _RunState
+
+    _registry = StateAgentRegistry()
+    _repo_root = _Path(__file__).resolve().parents[3] / "fixtures" / "todo-app"
+
+    async def _save(*, run_id: object, findings: object, provider: str, model: str) -> None:
+        import uuid as _uuid
+
+        from app.agents.schemas import ArchaeologistFindings as _Findings
+
+        assert isinstance(findings, _Findings)
+        _rid = run_id if isinstance(run_id, _uuid.UUID) else _uuid.UUID(str(run_id))
+        sess = factory()
+        try:
+            await save_analysis(
+                sess, run_id=_rid, findings=findings, provider=provider, model=model
+            )
+            await sess.commit()
+        except Exception:
+            await sess.rollback()
+            raise
+        finally:
+            await sess.close()
+
+    _registry.register(
+        _RunState.ANALYZING,
+        ArchaeologistAgent(llm=FakeLLMProvider(), repo_root=_repo_root, save_fn=_save),
+    )
     orchestrator = Orchestrator(
-        driver=StateAgentRegistry(),
+        driver=_registry,
         session_maker=factory,
     )
     app.state.orchestrator = orchestrator

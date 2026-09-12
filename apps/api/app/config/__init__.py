@@ -128,6 +128,13 @@ class Settings(BaseSettings):
         description="Default cap on LLM output tokens (cost control).",
     )
 
+    # ----- Archaeologist fixture repo (Issue #007) -----
+    fixture_repo_path: str = Field(
+        default=str(_REPO_ROOT / "fixtures" / "todo-app"),
+        validation_alias=AliasChoices("fixture_repo_path", "FORGE_FIXTURE_REPO_PATH"),
+        description="Filesystem path to the reference fixture repo analyzed by the Archaeologist.",
+    )
+
     @field_validator("cors_allow_origins", mode="before")
     @classmethod
     def _coerce_cors(cls, value: object) -> object:

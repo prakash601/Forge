@@ -1,0 +1,46 @@
+"""Persistence for Archaeologist findings (LLD §§12-15 seam)."""
+
+from __future__ import annotations
+
+import uuid
+from datetime import UTC, datetime
+
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.agents.models import RunAnalysis
+from app.agents.schemas import ArchaeologistFindings
+
+
+async def save_analysis(
+    session: AsyncSession,
+    *,
+    run_id: uuid.UUID,
+    findings: ArchaeologistFindings,
+    provider: str,
+    model: str,
+) -> RunAnalysis:
+    """Upsert findings for ``run_id``. Caller owns commit."""
+    now = datetime.now(UTC)
+    existing = await session.get(RunAnalysis, run_id)
+    payload = findings.model_dump()
+    if existing is None:
+        row = RunAnalysis(
+            run_id=run_id, findings=payload, provider=provider, model=model, created_at=now
+        )
+        session.add(row)
+        await session.flush()
+        return row
+    existing.findings = payload
+    existing.provider = provider
+    existing.model = model
+    await session.flush()
+    return existing
+
+
+async def get_analysis(session: AsyncSession, run_id: uuid.UUID) -> RunAnalysis | None:
+    result = await session.execute(select(RunAnalysis).where(RunAnalysis.run_id == run_id))
+    return result.scalars().first()
+
+
+__all__ = ["get_analysis", "save_analysis"]
