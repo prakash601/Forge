@@ -132,8 +132,8 @@ async def _truncate_all(engine: AsyncEngine) -> None:
     async with engine.connect() as conn:
         await conn.execute(
             text(
-                "TRUNCATE TABLE run_analyses, memory_embeddings, memory_items, projects, users, "
-                "run_steps, runs RESTART IDENTITY CASCADE"
+                "TRUNCATE TABLE run_implementations, run_plans, run_analyses, memory_embeddings, "
+                "memory_items, projects, users, run_steps, runs RESTART IDENTITY CASCADE"
             )
         )
         await conn.commit()
@@ -266,15 +266,238 @@ async def client(app_instance: Any) -> AsyncIterator[AsyncClient]:
         yield ac
 
 
+FIXTURE_ROOT = Path(__file__).resolve().parents[3] / "fixtures" / "todo-app"
+
+
+def _pagination_edit_pair() -> tuple[str, str]:
+    """Derive the canned pagination edit from the live fixture file.
+
+    Reading the anchor from disk (instead of hardcoding it) keeps the
+    canned developer payload valid when the fixture evolves.
+    """
+    src = (FIXTURE_ROOT / "app" / "main.py").read_text(encoding="utf-8")
+    lines = src.splitlines()
+    start = next(i for i, line in enumerate(lines) if line.startswith("def list_todos"))
+    old = "\n".join(lines[start : start + 2])
+    assert "sorted(_store)" in old, "fixture list_todos anchor drifted"
+    new = (
+        "def list_todos(limit: int = 100, offset: int = 0) -> list[Todo]:\n"
+        "    items = [_store[key] for key in sorted(_store)]\n"
+        "    return items[offset : offset + limit]"
+    )
+    return old, new
+
+
+def _wire_test_agents(registry: Any, factory: Any, workspace_root: Path) -> None:
+    """Register deterministic FakeLLM agents for the Phase 2 loop.
+
+    Archaeologist (ANALYZING), planner (PLANNING), developer
+    (IMPLEMENTING) persist to the test database. The policy
+    auto-approver (AWAITING_APPROVAL) is registered by the caller when
+    wanted, so approval tests can run with a human in the loop.
+    """
+    import uuid as _uuid
+
+    from app.agents.archaeologist import ArchaeologistAgent
+    from app.agents.developer import DeveloperAgent
+    from app.agents.planner import PlannerAgent
+    from app.agents.schemas import (
+        ArchaeologistFindings as _Findings,
+    )
+    from app.agents.schemas import (
+        DeveloperResult as _Result,
+    )
+    from app.agents.schemas import (
+        Plan as _Plan,
+    )
+    from app.agents.service import save_analysis, save_implementation, save_plan
+    from app.agents.workspace import WorkspaceManager
+    from app.llm.fake import FakeLLMProvider
+    from app.runs.enums import RunState as _RunState
+
+    async def _commit(sess: Any) -> None:
+        try:
+            await sess.commit()
+        except Exception:
+            await sess.rollback()
+            raise
+
+    async def _save_analysis(*, run_id: object, findings: object, **kwargs: Any) -> None:
+        assert isinstance(findings, _Findings)
+        _rid = run_id if isinstance(run_id, _uuid.UUID) else _uuid.UUID(str(run_id))
+        sess = factory()
+        try:
+            await save_analysis(
+                sess,
+                run_id=_rid,
+                findings=findings,
+                provider=str(kwargs.get("provider", "fake")),
+                model=str(kwargs.get("model", "fake-llm")),
+            )
+            await _commit(sess)
+        finally:
+            await sess.close()
+
+    async def _save_plan(*, run_id: object, plan: object, **kwargs: Any) -> None:
+        assert isinstance(plan, _Plan)
+        _rid = run_id if isinstance(run_id, _uuid.UUID) else _uuid.UUID(str(run_id))
+        sess = factory()
+        try:
+            await save_plan(
+                sess,
+                run_id=_rid,
+                plan=plan,
+                provider=str(kwargs.get("provider", "fake")),
+                model=str(kwargs.get("model", "fake-llm")),
+            )
+            await _commit(sess)
+        finally:
+            await sess.close()
+
+    async def _save_impl(*, run_id: object, result: object, **kwargs: Any) -> None:
+        assert isinstance(result, _Result)
+        _rid = run_id if isinstance(run_id, _uuid.UUID) else _uuid.UUID(str(run_id))
+        sess = factory()
+        try:
+            await save_implementation(
+                sess,
+                run_id=_rid,
+                result=result,
+                provider=str(kwargs.get("provider", "fake")),
+                model=str(kwargs.get("model", "fake-llm")),
+                workspace_path=str(kwargs.get("workspace_path", "")),
+            )
+            await _commit(sess)
+        finally:
+            await sess.close()
+
+    async def _load_plan(*, run_id: object, **kwargs: Any) -> Any:
+        from app.agents.schemas import Plan as _Plan
+        from app.agents.service import get_plan
+
+        _rid = run_id if isinstance(run_id, _uuid.UUID) else _uuid.UUID(str(run_id))
+        sess = factory()
+        try:
+            row = await get_plan(sess, _rid)
+            return _Plan.model_validate(row.plan) if row is not None else None
+        finally:
+            await sess.close()
+
+    async def _load_findings(*, run_id: object, **kwargs: Any) -> Any:
+        from app.agents.schemas import ArchaeologistFindings as _Findings
+        from app.agents.service import get_analysis
+
+        _rid = run_id if isinstance(run_id, _uuid.UUID) else _uuid.UUID(str(run_id))
+        sess = factory()
+        try:
+            row = await get_analysis(sess, _rid)
+            return _Findings.model_validate(row.findings) if row is not None else None
+        finally:
+            await sess.close()
+
+    old_text, new_text = _pagination_edit_pair()
+    registry.register(
+        _RunState.ANALYZING,
+        ArchaeologistAgent(llm=FakeLLMProvider(), repo_root=FIXTURE_ROOT, save_fn=_save_analysis),
+    )
+    registry.register(
+        _RunState.PLANNING,
+        PlannerAgent(
+            llm=FakeLLMProvider(
+                agent_type="planner",
+                canned={
+                    "planner": {
+                        "goal": "Add pagination to GET /todos",
+                        "approach": "Slice the in-memory list with limit/offset.",
+                        "steps": [{"title": "Update list_todos", "detail": "Add params."}],
+                        "files_to_change": ["app/main.py"],
+                        "files_to_add": [],
+                        "tests": ["fixtures tests still pass"],
+                        "risks": ["clients relying on full list"],
+                        "rollback_strategy": "Revert the edit.",
+                    }
+                },
+            ),
+            repo_root=FIXTURE_ROOT,
+            save_fn=_save_plan,
+            findings_provider=_load_findings,
+        ),
+    )
+    registry.register(
+        _RunState.IMPLEMENTING,
+        DeveloperAgent(
+            llm=FakeLLMProvider(
+                agent_type="developer",
+                canned={
+                    "developer": {
+                        "edits": [
+                            {
+                                "path": "app/main.py",
+                                "mode": "edit",
+                                "old_text": old_text,
+                                "new_text": new_text,
+                            }
+                        ],
+                        "summary": "Paginated list_todos.",
+                        "implementation_notes": ["limit/offset slice"],
+                        "validation": ["fixture tests"],
+                        "remaining_risks": [],
+                    }
+                },
+            ),
+            workspaces=WorkspaceManager(root=workspace_root, fixture_dir=FIXTURE_ROOT),
+            save_fn=_save_impl,
+            plan_provider=_load_plan,
+        ),
+    )
+
+
 @pytest_asyncio.fixture
 async def orchestrator_app(
-    app_settings: Any,
+    app_settings: Any, tmp_path: Path
 ) -> AsyncIterator[tuple[AsyncClient, Orchestrator]]:
-    """Build an app with the orchestrator wired in, returning the client.
+    """Full Phase 2 loop with policy auto-approval (default settings).
 
-    The orchestrator is installed on ``app.state`` and uses the same
-    async session factory as the API layer. Tests can inspect
-    ``orchestrator.runtime`` to assert on in-flight tasks.
+    The walk now ends parked in TESTING (Tester lands in #009).
+    """
+    from app.config import get_settings
+
+    get_settings.cache_clear()
+
+    from app.agents.policy import PolicyAutoApproveAgent
+    from app.db import session as db_session
+    from app.main import create_app
+    from app.orchestrator import Orchestrator, StateAgentRegistry
+    from app.runs.enums import RunState as _RunState
+
+    db_session.init_engine(app_settings)
+    app = create_app(app_settings)
+    factory = db_session.get_session_factory()
+    registry = StateAgentRegistry()
+    _wire_test_agents(registry, factory, tmp_path / "workspaces")
+    registry.register(_RunState.AWAITING_APPROVAL, PolicyAutoApproveAgent())
+    orchestrator = Orchestrator(
+        driver=registry,
+        session_maker=factory,
+    )
+    app.state.orchestrator = orchestrator
+    try:
+        transport = ASGITransport(app=app)
+        async with AsyncClient(transport=transport, base_url="http://testserver") as ac:
+            yield ac, orchestrator
+    finally:
+        await orchestrator.shutdown()
+        await db_session.dispose_engine()
+
+
+@pytest_asyncio.fixture
+async def manual_approval_app(
+    app_settings: Any, tmp_path: Path
+) -> AsyncIterator[tuple[AsyncClient, Orchestrator]]:
+    """Phase 2 loop with a human in the approval seat (no policy agent).
+
+    Runs park in AWAITING_APPROVAL so tests can approve or reject plans
+    over HTTP and assert the approved_by audit trail.
     """
     from app.config import get_settings
 
@@ -287,41 +510,10 @@ async def orchestrator_app(
     db_session.init_engine(app_settings)
     app = create_app(app_settings)
     factory = db_session.get_session_factory()
-    from pathlib import Path as _Path
-
-    from app.agents.archaeologist import ArchaeologistAgent
-    from app.agents.service import save_analysis
-    from app.llm.fake import FakeLLMProvider
-    from app.runs.enums import RunState as _RunState
-
-    _registry = StateAgentRegistry()
-    _repo_root = _Path(__file__).resolve().parents[3] / "fixtures" / "todo-app"
-
-    async def _save(*, run_id: object, findings: object, provider: str, model: str) -> None:
-        import uuid as _uuid
-
-        from app.agents.schemas import ArchaeologistFindings as _Findings
-
-        assert isinstance(findings, _Findings)
-        _rid = run_id if isinstance(run_id, _uuid.UUID) else _uuid.UUID(str(run_id))
-        sess = factory()
-        try:
-            await save_analysis(
-                sess, run_id=_rid, findings=findings, provider=provider, model=model
-            )
-            await sess.commit()
-        except Exception:
-            await sess.rollback()
-            raise
-        finally:
-            await sess.close()
-
-    _registry.register(
-        _RunState.ANALYZING,
-        ArchaeologistAgent(llm=FakeLLMProvider(), repo_root=_repo_root, save_fn=_save),
-    )
+    registry = StateAgentRegistry()
+    _wire_test_agents(registry, factory, tmp_path / "workspaces")
     orchestrator = Orchestrator(
-        driver=_registry,
+        driver=registry,
         session_maker=factory,
     )
     app.state.orchestrator = orchestrator

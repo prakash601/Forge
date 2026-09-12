@@ -174,6 +174,13 @@ class Orchestrator:
                 await _apply_safely(session, run_id, "unrecoverable_error", request_id)
                 return
 
+            # A plan approval carries its actor for the audit trail
+            # (CONTEXT.md): the policy agent approves as "policy",
+            # anything else defaults to no actor recorded.
+            approved_by: str | None = None
+            if next_event == "plan_approved":
+                approved_by = getattr(agent, "approval_actor", None)
+
             if next_event is None:
                 log.debug(
                     "orchestrator_agent_returned_none",
@@ -184,7 +191,9 @@ class Orchestrator:
                 return
 
             # Apply and capture the resulting from->to for the next hook.
-            applied = await _apply_and_capture(session, run_id, next_event, request_id)
+            applied = await _apply_and_capture(
+                session, run_id, next_event, request_id, approved_by=approved_by
+            )
             if applied is not None:
                 from_state, to_state = applied
                 # Re-fire the hook on the new state. Because
@@ -265,10 +274,11 @@ async def _apply_and_capture(
     run_id: uuid.UUID,
     event: str,
     request_id: str,
+    approved_by: str | None = None,
 ) -> tuple[RunState, RunState] | None:
     """Apply ``event`` and capture the from/to states for the next hook."""
     try:
-        run = await apply_transition(session, run_id, event)
+        run = await apply_transition(session, run_id, event, approved_by=approved_by)
         await session.commit()
         from_state: RunState = getattr(run, "_from_state", run.state)
         log.info(

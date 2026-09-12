@@ -113,6 +113,7 @@ class RunStep(Base):
         nullable=False,
     )
     event: Mapped[str] = mapped_column(Text, nullable=False)
+    approved_by: Mapped[str | None] = mapped_column(Text, nullable=True, default=None)
     to_state: Mapped[RunState] = mapped_column(
         SAEnum(
             RunState,

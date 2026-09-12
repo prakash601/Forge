@@ -11,4 +11,12 @@ class ArchaeologistError(RuntimeError):
     """The Archaeologist agent failed (LLM, tools, or persistence)."""
 
 
-__all__ = ["ArchaeologistError", "ToolPermissionError"]
+__all__ = [
+    "ArchaeologistError",
+    "ToolPermissionError",
+    "WorkspaceError",
+]
+
+
+class WorkspaceError(RuntimeError):
+    """A workspace operation failed (seed, confinement, edit, commit)."""

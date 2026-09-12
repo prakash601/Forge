@@ -121,8 +121,12 @@ async def apply_event_endpoint(
     run_id: Annotated[uuid.UUID, Path(description="Run identifier (UUID).")],
 ) -> RunRead:
     request_id: str = request.state.request_id
+    # An explicit approval over HTTP is a person driving the run, so it
+    # records approved_by=human. Machine approvals arrive via the
+    # orchestrator (approved_by=policy); see CONTEXT.md.
+    approved_by = "human" if payload.event == "plan_approved" else None
     try:
-        run = await service.transition(session, run_id, payload.event)
+        run = await service.transition(session, run_id, payload.event, approved_by=approved_by)
     except RunNotFoundError as exc:
         await session.rollback()
         raise HTTPException(
