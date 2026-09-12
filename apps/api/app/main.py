@@ -50,14 +50,23 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     init_engine(settings)
     factory = get_session_factory()
     registry = StateAgentRegistry()
-    # Issue #007: wire the real Archaeologist for ANALYZING. The stub
-    # remains registered for CREATED/PLANNING/AWAITING_APPROVAL/
-    # IMPLEMENTING so the rest of the loop still walks in Phase 2.
+    # Issues #007/#008: wire the real agents. The stub remains only
+    # for CREATED (repository_ready) until repository onboarding lands.
     try:
         from pathlib import Path as _Path
 
         from app.agents.archaeologist import ArchaeologistAgent
-        from app.agents.service import save_analysis
+        from app.agents.developer import DeveloperAgent
+        from app.agents.planner import PlannerAgent
+        from app.agents.policy import PolicyAutoApproveAgent
+        from app.agents.service import (
+            get_analysis,
+            get_plan,
+            save_analysis,
+            save_implementation,
+            save_plan,
+        )
+        from app.agents.workspace import WorkspaceManager
         from app.llm.registry import get_llm_provider
 
         _llm = get_llm_provider(
@@ -98,8 +107,118 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         registry.register(RunState.ANALYZING, _archaeologist)
         app.state.archaeologist = _archaeologist
         app.state.llm_provider = _llm
+
+        async def _save_plan(*, run_id: object, plan: object, provider: str, model: str) -> None:
+            import uuid as _uuid
+
+            from app.agents.schemas import Plan as _Plan
+
+            _rid = run_id if isinstance(run_id, _uuid.UUID) else _uuid.UUID(str(run_id))
+            assert isinstance(plan, _Plan)
+            session = factory()
+            try:
+                await save_plan(session, run_id=_rid, plan=plan, provider=provider, model=model)
+                await session.commit()
+            except Exception:
+                await session.rollback()
+                raise
+            finally:
+                await session.close()
+
+        async def _load_findings(*, run_id: object) -> object:
+            import uuid as _uuid
+
+            from app.agents.schemas import ArchaeologistFindings as _Findings
+
+            _rid = run_id if isinstance(run_id, _uuid.UUID) else _uuid.UUID(str(run_id))
+            session = factory()
+            try:
+                row = await get_analysis(session, _rid)
+                if row is None:
+                    return None
+                return _Findings.model_validate(row.findings)
+            finally:
+                await session.close()
+
+        _planner = PlannerAgent(
+            llm=_llm,
+            repo_root=_Path(settings.fixture_repo_path),
+            save_fn=_save_plan,
+            findings_provider=_load_findings,
+            model=settings.llm_model,
+        )
+        registry.register(RunState.PLANNING, _planner)
+        app.state.planner = _planner
+
+        async def _save_implementation(
+            *,
+            run_id: object,
+            result: object,
+            provider: str,
+            model: str,
+            workspace_path: str,
+        ) -> None:
+            import uuid as _uuid
+
+            from app.agents.schemas import DeveloperResult as _Result
+
+            _rid = run_id if isinstance(run_id, _uuid.UUID) else _uuid.UUID(str(run_id))
+            assert isinstance(result, _Result)
+            session = factory()
+            try:
+                await save_implementation(
+                    session,
+                    run_id=_rid,
+                    result=result,
+                    provider=provider,
+                    model=model,
+                    workspace_path=workspace_path,
+                )
+                await session.commit()
+            except Exception:
+                await session.rollback()
+                raise
+            finally:
+                await session.close()
+
+        async def _load_plan(*, run_id: object) -> object:
+            import uuid as _uuid
+
+            from app.agents.schemas import Plan as _Plan
+
+            _rid = run_id if isinstance(run_id, _uuid.UUID) else _uuid.UUID(str(run_id))
+            session = factory()
+            try:
+                row = await get_plan(session, _rid)
+                if row is None:
+                    return None
+                return _Plan.model_validate(row.plan)
+            finally:
+                await session.close()
+
+        _workspaces = WorkspaceManager(
+            root=_Path(settings.workspace_root),
+            fixture_dir=_Path(settings.fixture_repo_path),
+        )
+        _developer = DeveloperAgent(
+            llm=_llm,
+            workspaces=_workspaces,
+            save_fn=_save_implementation,
+            plan_provider=_load_plan,
+            model=settings.llm_model,
+        )
+        registry.register(RunState.IMPLEMENTING, _developer)
+        app.state.developer = _developer
+
+        if settings.auto_approve:
+            registry.register(RunState.AWAITING_APPROVAL, PolicyAutoApproveAgent())
+        else:
+            # Neutralize the stub mapping: a waiting run must not approve itself.
+            from app.orchestrator import null_agent
+
+            registry.register(RunState.AWAITING_APPROVAL, null_agent)
     except Exception as exc:
-        log.warning("archaeologist_wire_failed", error=str(exc))
+        log.warning("agents_wire_failed", error=str(exc))
     orchestrator = Orchestrator(
         driver=registry,
         session_maker=factory,

@@ -25,7 +25,7 @@ Layering
 
 from __future__ import annotations
 
-from app.orchestrator.agents import archaeologist_stub
+from app.orchestrator.agents import archaeologist_stub, null_agent
 from app.orchestrator.context import AgentContext
 from app.orchestrator.orchestrator import Orchestrator
 from app.orchestrator.protocols import Agent, Driver
@@ -40,4 +40,5 @@ __all__ = [
     "Orchestrator",
     "StateAgentRegistry",
     "archaeologist_stub",
+    "null_agent",
 ]

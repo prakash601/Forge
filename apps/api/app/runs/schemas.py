@@ -28,6 +28,7 @@ class RunStepRead(BaseModel):
     sequence: int
     from_state: RunState
     event: str
+    approved_by: str | None = None
     to_state: RunState
     created_at: datetime
 

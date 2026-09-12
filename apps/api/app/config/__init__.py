@@ -128,6 +128,21 @@ class Settings(BaseSettings):
         description="Default cap on LLM output tokens (cost control).",
     )
 
+    # ----- Planning / approval / workspaces (Issue #008) -----
+    auto_approve: bool = Field(
+        default=True,
+        validation_alias=AliasChoices("auto_approve", "FORGE_AUTO_APPROVE"),
+        description=(
+            "When true, plans are policy-approved automatically "
+            "(approved_by=policy). Phase 3 flips this for human approval UX."
+        ),
+    )
+    workspace_root: str = Field(
+        default=str(_REPO_ROOT / ".forge-workspaces"),
+        validation_alias=AliasChoices("workspace_root", "FORGE_WORKSPACE_ROOT"),
+        description="Root directory for per-run Developer task workspaces.",
+    )
+
     # ----- Archaeologist fixture repo (Issue #007) -----
     fixture_repo_path: str = Field(
         default=str(_REPO_ROOT / "fixtures" / "todo-app"),

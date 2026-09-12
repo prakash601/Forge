@@ -25,41 +25,43 @@ from app.orchestrator import Orchestrator
 from app.runs.enums import RunState
 
 # ---------------------------------------------------------------------------
-# End-to-end: stub walks the path CREATED -> ... -> CANCELLED.
+# End-to-end: Phase 2 loop walks CREATED -> ... -> TESTING.
 # ---------------------------------------------------------------------------
 
 
-async def test_create_run_drives_stub_to_cancelled(
+async def test_create_run_drives_loop_to_testing(
     orchestrator_app: tuple[AsyncClient, Orchestrator],
 ) -> None:
-    """A bare POST /api/v1/runs should reach CANCELLED via the stub path."""
+    """A bare POST /api/v1/runs should reach TESTING via the real agents.
+
+    CREATED still uses the stub (repository_ready); ANALYZING runs the
+    Archaeologist, PLANNING the planner, AWAITING_APPROVAL the policy
+    auto-approver, and IMPLEMENTING the Developer. TESTING has no agent
+    until #009, so the run parks there.
+    """
     client, orchestrator = orchestrator_app
 
-    response = await client.post("/api/v1/runs", json={"task": "smoke test for orchestrator"})
+    response = await client.post("/api/v1/runs", json={"task": "add pagination to /todos"})
     assert response.status_code == 201, response.text
     run_id = response.json()["id"]
 
-    # Wait for the orchestrator to drive the run to a terminal state.
-    # The stub path is (per docs/STATUS.md §4.2):
-    #   CREATED              -> repository_ready
-    #   ANALYZING            -> analysis_complete
-    #   PLANNING             -> plan_ready
-    #   AWAITING_APPROVAL    -> plan_approved (auto-approve)
-    #   IMPLEMENTING         -> cancel (no real implementation)
-    final = await _wait_for_terminal(client, run_id, timeout_s=5.0)
+    final = await _wait_for_state(client, run_id, {"TESTING"}, timeout_s=15.0)
     body = final.json()
-    assert body["state"] == "CANCELLED"
-    assert body["is_terminal"] is True
-    # Every step the stub applied must be recorded.
+    assert body["state"] == "TESTING"
+    assert body["is_terminal"] is False
     events = [step["event"] for step in body["steps"]]
     assert events == [
         "repository_ready",
         "analysis_complete",
         "plan_ready",
         "plan_approved",
-        "cancel",
+        "implementation_complete",
     ]
-    # After the run terminates, no orchestrator task should remain.
+    # Policy auto-approval is audited on the step.
+    approved = [step for step in body["steps"] if step["event"] == "plan_approved"]
+    assert len(approved) == 1
+    assert approved[0]["approved_by"] == "policy"
+    # After the run parks, no orchestrator task should remain.
     assert orchestrator.runtime.outstanding() == 0
 
 
@@ -83,16 +85,17 @@ async def test_create_run_does_not_invoke_orchestrator_when_uninstalled(
 async def test_external_event_application_drives_orchestrator(
     orchestrator_app: tuple[AsyncClient, Orchestrator],
 ) -> None:
-    """Manually applying an event for a non-orchestrator-owned state does not crash."""
+    """Manually applying an event for a parked run advances it."""
     client, _orchestrator = orchestrator_app
-    # First create + wait for the stub to walk to terminal.
+    # First create + wait for the loop to park in TESTING.
     create = await client.post("/api/v1/runs", json={"task": "manual event"})
     assert create.status_code == 201
     run_id = create.json()["id"]
-    await _wait_for_terminal(client, run_id, timeout_s=5.0)
-    # Applying an event to a terminal run returns 409 (per Issue #001).
-    response = await client.post(f"/api/v1/runs/{run_id}/events", json={"event": "cancel"})
-    assert response.status_code == 409
+    await _wait_for_state(client, run_id, {"TESTING"}, timeout_s=15.0)
+    # TESTING has no agent yet (#009); a manual tests_passed moves the run on.
+    response = await client.post(f"/api/v1/runs/{run_id}/events", json={"event": "tests_passed"})
+    assert response.status_code == 200, response.text
+    assert response.json()["state"] == "REVIEWING"
 
 
 # ---------------------------------------------------------------------------
@@ -100,24 +103,25 @@ async def test_external_event_application_drives_orchestrator(
 # ---------------------------------------------------------------------------
 
 
-async def _wait_for_terminal(
+async def _wait_for_state(
     client: AsyncClient,
     run_id: str,
+    states: set[str],
     *,
     timeout_s: float,
     poll_interval_s: float = 0.05,
 ) -> Any:
-    """Poll ``GET /runs/{id}`` until ``state`` is terminal or we time out."""
+    """Poll ``GET /runs/{id}`` until ``state`` is in ``states`` or we time out."""
     deadline = asyncio.get_event_loop().time() + timeout_s
     while True:
         response = await client.get(f"/api/v1/runs/{run_id}")
         assert response.status_code == 200, response.text
         body = response.json()
-        if body["state"] in ("COMPLETED", "FAILED", "CANCELLED"):
+        if body["state"] in states:
             return response
         if asyncio.get_event_loop().time() > deadline:
             raise AssertionError(
-                f"Run {run_id} did not reach terminal state within {timeout_s}s. "
+                f"Run {run_id} did not reach {sorted(states)} within {timeout_s}s. "
                 f"Last state: {body['state']}"
             )
         await asyncio.sleep(poll_interval_s)

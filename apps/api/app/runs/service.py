@@ -96,6 +96,7 @@ async def transition(
     event: str,
     *,
     expected_version: int | None = None,
+    approved_by: str | None = None,
 ) -> Run:
     """Apply ``event`` to the Run identified by ``run_id``.
 
@@ -129,6 +130,12 @@ async def transition(
                                 does not match.
     """
     run_event = _coerce_event(event)
+
+    if approved_by is not None:
+        if run_event is not RunEvent.PLAN_APPROVED:
+            raise ValueError("approved_by is only valid with the plan_approved event")
+        if approved_by not in ("human", "policy"):
+            raise ValueError("approved_by must be 'human' or 'policy'")
 
     # Read current state. We do this with an explicit select rather than
     # session.get() so that we can ALSO enforce expected_version atomically
@@ -182,6 +189,7 @@ async def transition(
         sequence=next_sequence,
         from_state=current_state,
         event=run_event.value,
+        approved_by=approved_by,
         to_state=next_state_value,
         created_at=now,
     )

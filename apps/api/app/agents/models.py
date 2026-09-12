@@ -30,4 +30,37 @@ class RunAnalysis(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 
 
-__all__ = ["RunAnalysis"]
+__all__ = ["RunAnalysis", "RunImplementation", "RunPlan"]
+
+
+class RunPlan(Base):
+    """Persisted Planner output for one Run (AGENT_CONTRACTS §7)."""
+
+    __tablename__ = "run_plans"
+
+    run_id: Mapped[uuid.UUID] = mapped_column(
+        PG_UUID(as_uuid=True),
+        ForeignKey("runs.id", ondelete="CASCADE"),
+        primary_key=True,
+    )
+    plan: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False)
+    provider: Mapped[str] = mapped_column(Text, nullable=False)
+    model: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
+class RunImplementation(Base):
+    """Persisted Developer output for one Run (AGENT_CONTRACTS §8)."""
+
+    __tablename__ = "run_implementations"
+
+    run_id: Mapped[uuid.UUID] = mapped_column(
+        PG_UUID(as_uuid=True),
+        ForeignKey("runs.id", ondelete="CASCADE"),
+        primary_key=True,
+    )
+    result: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False)
+    provider: Mapped[str] = mapped_column(Text, nullable=False)
+    model: Mapped[str] = mapped_column(Text, nullable=False)
+    workspace_path: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)

@@ -61,4 +61,20 @@ _NEXT_EVENT: dict[object, str] = {
 archaeologist_stub: _ArchaeologistStub = _ArchaeologistStub()
 
 
-__all__ = ["archaeologist_stub"]
+class _NullAgent:
+    """Parks a state: returns ``None`` so the orchestrator waits.
+
+    Used to neutralize a stub mapping when a state must wait for
+    external input — e.g. AWAITING_APPROVAL with FORGE_AUTO_APPROVE=false.
+    """
+
+    name: str = "null_agent"
+
+    async def run(self, context: AgentContext) -> str | None:
+        return None
+
+
+null_agent: _NullAgent = _NullAgent()
+
+
+__all__ = ["archaeologist_stub", "null_agent"]

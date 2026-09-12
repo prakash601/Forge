@@ -266,6 +266,39 @@ async def test_handle_transition_recovers_from_agent_exception() -> None:
     assert spy.applied == [(run_id, "unrecoverable_error")]
 
 
+async def test_plan_approved_carries_agent_approval_actor() -> None:
+    """The orchestrator forwards approval_actor onto plan_approved steps."""
+
+    class _PolicyAgent(_RecordingAgent):
+        approval_actor = "policy"
+
+        def __init__(self) -> None:
+            super().__init__("policy", return_value="plan_approved")
+
+    driver = StateAgentRegistry()
+    driver.register(RunState.AWAITING_APPROVAL, _PolicyAgent())
+    # Park the run after approval so the stub does not walk onward.
+    driver.register(RunState.IMPLEMENTING, _StaticAgent("noop", return_value=None))
+    runtime = InProcessRuntime()
+    spy = _TransitionSpy(initial_state=RunState.AWAITING_APPROVAL)
+    orchestrator = Orchestrator(
+        driver=driver,
+        runtime=runtime,
+        session_factory=spy.session_factory(),
+    )
+    run_id = uuid.uuid4()
+    orchestrator.handle_transition(
+        run_id=run_id,
+        from_state=RunState.PLANNING,
+        to_state=RunState.AWAITING_APPROVAL,
+        event="plan_ready",
+        request_id="req_test",
+    )
+    await runtime.shutdown()
+    assert spy.applied == [(run_id, "plan_approved")]
+    assert spy.approved == [(run_id, "plan_approved", "policy")]
+
+
 async def test_handle_transition_handles_agent_returning_none() -> None:
     """If the agent returns None, no transition is applied."""
     driver = StateAgentRegistry()
@@ -360,6 +393,7 @@ class _TransitionSpy:
 
     def __init__(self, initial_state: RunState = RunState.CREATED) -> None:
         self.applied: list[tuple[uuid.UUID, str]] = []
+        self.approved: list[tuple[uuid.UUID, str, Any]] = []
         self._initial_state = initial_state
         # Track per-run state. The orchestrator only knows about one
         # run per test, so a single ``last_run_id`` is enough; this
@@ -478,11 +512,12 @@ def _patch_apply_transition(monkeypatch: pytest.MonkeyPatch) -> None:
 
     original = orch_mod.apply_transition
 
-    async def recording(session: Any, run_id: Any, event: str) -> Any:
+    async def recording(session: Any, run_id: Any, event: str, approved_by: Any = None) -> Any:
         spy = getattr(session, "_spy", None)
         if spy is None:
             return None
         spy.applied.append((run_id, event))
+        spy.approved.append((run_id, event, approved_by))
         # Advance the spy's view of the run's state via the real
         # transition table. Falls back to leaving the state unchanged
         # if the transition is invalid (matches real behavior).
