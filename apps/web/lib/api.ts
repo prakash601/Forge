@@ -91,6 +91,7 @@ export interface ApiClient {
   getRun(runId: string): Promise<Run>;
   getRunDetails(runId: string): Promise<RunDetails>;
   applyEvent(runId: string, event: "plan_approved" | "plan_rejected"): Promise<Run>;
+  createRun(task: string): Promise<Run>;
 }
 
 export function createApiClient(baseUrl: string): ApiClient {
@@ -146,5 +147,6 @@ export function createApiClient(baseUrl: string): ApiClient {
       get<RunDetails>(`/api/v1/runs/${encodeURIComponent(runId)}/details`),
     applyEvent: (runId: string, event: "plan_approved" | "plan_rejected") =>
       post<Run>(`/api/v1/runs/${encodeURIComponent(runId)}/events`, { event }),
+    createRun: (task: string) => post<Run>("/api/v1/runs", { task }),
   };
 }

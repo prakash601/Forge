@@ -4,6 +4,10 @@ import type { ReactElement } from "react";
 
 import { ApiError, createApiClient } from "@/lib/api";
 
+vi.mock("next/navigation", () => ({
+  useRouter: () => ({ push: vi.fn() }),
+}));
+
 async function renderResolved(
   element: ReactElement | Promise<ReactElement>,
 ) {
