@@ -368,3 +368,15 @@ main.dashboard h1 {
   width: 100%;
   margin: 0;
 }
+
+/* ----- Intervention panel (Phase 3, #013) ----- */
+
+.panel.intervention {
+  border-color: var(--forge-error);
+}
+
+.panel.intervention a {
+  color: var(--forge-accent);
+  text-decoration: none;
+  font-size: 0.875rem;
+}
