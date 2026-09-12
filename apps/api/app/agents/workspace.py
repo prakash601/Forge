@@ -95,7 +95,16 @@ class Workspace:
         if not message or not message.strip():
             raise WorkspaceError("commit message must be non-empty")
         _git(self._root, "add", "-A")
-        out = _git(self._root, "commit", "-m", message.strip())
+        out = _git(
+            self._root,
+            "-c",
+            "user.name=forge",
+            "-c",
+            "user.email=forge@localhost",
+            "commit",
+            "-m",
+            message.strip(),
+        )
         return out.strip().splitlines()[0] if out.strip() else ""
 
 
@@ -123,9 +132,20 @@ class WorkspaceManager:
                 ),
             )
             workspace = Workspace(dest)
-            _git(dest, "init", "-q")
+            # Identity is pinned per command (same as LocalWorkspaceExecutor)
+            # so seeding works on runners without a global git identity.
+            _git(dest, "init", "-q", "-b", "main")
             _git(dest, "add", "-A")
-            _git(dest, "commit", "-qm", "seed fixture")
+            _git(
+                dest,
+                "-c",
+                "user.name=forge",
+                "-c",
+                "user.email=forge@localhost",
+                "commit",
+                "-qm",
+                "seed fixture",
+            )
             return workspace
         return Workspace(dest)
 
