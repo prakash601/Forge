@@ -57,11 +57,35 @@ describe("Home page (rendered via async server-component helper)", () => {
   const originalFetch = global.fetch;
 
   beforeEach(() => {
-    global.fetch = vi.fn().mockResolvedValue(
-      new Response(JSON.stringify({ status: "ok", version: "0.1.0" }), {
-        status: 200,
-      }),
-    );
+    global.fetch = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.endsWith("/ready")) {
+        return new Response(JSON.stringify({ status: "ok", version: "0.1.0" }), {
+          status: 200,
+        });
+      }
+      if (url.includes("/api/v1/runs")) {
+        return new Response(
+          JSON.stringify({
+            runs: [
+              {
+                id: "run-1",
+                state: "COMPLETED",
+                is_terminal: true,
+                task: "add pagination to /todos",
+                version: 7,
+                created_at: "2026-09-12T00:00:00Z",
+                updated_at: "2026-09-12T00:01:00Z",
+                steps: [],
+              },
+            ],
+            total: 1,
+          }),
+          { status: 200 },
+        );
+      }
+      throw new Error(`unexpected fetch: ${url}`);
+    });
   });
 
   afterEach(() => {
@@ -81,6 +105,34 @@ describe("Home page (rendered via async server-component helper)", () => {
       expect(
         screen.getByText(/Connected to API \(v0\.1\.0\)/),
       ).toBeInTheDocument();
+    });
+  });
+
+  it("lists runs with state and a link to the detail page", async () => {
+    const { default: Home } = await import("@/app/page");
+    const { container } = await renderResolved(Home({ searchParams: {} }));
+
+    await waitFor(() => {
+      expect(screen.getByText("add pagination to /todos")).toBeInTheDocument();
+    });
+    expect(screen.getByText("COMPLETED")).toBeInTheDocument();
+    const link = container.querySelector('a[href="/runs/run-1"]');
+    expect(link).not.toBeNull();
+  });
+
+  it("shows a fallback when the runs list cannot load", async () => {
+    global.fetch = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.endsWith("/ready")) {
+        return new Response(JSON.stringify({ status: "ok" }), { status: 200 });
+      }
+      return new Response("boom", { status: 500 });
+    });
+    const { default: Home } = await import("@/app/page");
+    await renderResolved(Home({ searchParams: {} }));
+
+    await waitFor(() => {
+      expect(screen.getByText("Could not load runs from the API.")).toBeInTheDocument();
     });
   });
 });
