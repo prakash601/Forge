@@ -90,6 +90,7 @@ export interface ApiClient {
   listRuns(limit?: number, offset?: number): Promise<RunListResponse>;
   getRun(runId: string): Promise<Run>;
   getRunDetails(runId: string): Promise<RunDetails>;
+  applyEvent(runId: string, event: "plan_approved" | "plan_rejected"): Promise<Run>;
 }
 
 export function createApiClient(baseUrl: string): ApiClient {
@@ -112,6 +113,26 @@ export function createApiClient(baseUrl: string): ApiClient {
     return (await response.json()) as T;
   }
 
+  async function post<T>(path: string, body: unknown): Promise<T> {
+    const response = await fetch(`${trimmed}${path}`, {
+      method: "POST",
+      headers: { Accept: "application/json", "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+
+    if (!response.ok) {
+      throw new ApiError(
+        `Request to ${path} failed with status ${response.status}`,
+        response.status,
+      );
+    }
+
+    if (response.status === 204) {
+      return undefined as T;
+    }
+    return (await response.json()) as T;
+  }
+
   return {
     baseUrl: trimmed,
     getHealth: () => get<HealthResponse>("/health"),
@@ -123,5 +144,7 @@ export function createApiClient(baseUrl: string): ApiClient {
     getRun: (runId: string) => get<Run>(`/api/v1/runs/${encodeURIComponent(runId)}`),
     getRunDetails: (runId: string) =>
       get<RunDetails>(`/api/v1/runs/${encodeURIComponent(runId)}/details`),
+    applyEvent: (runId: string, event: "plan_approved" | "plan_rejected") =>
+      post<Run>(`/api/v1/runs/${encodeURIComponent(runId)}/events`, { event }),
   };
 }

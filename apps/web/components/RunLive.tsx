@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 
 import {
   createApiClient,
@@ -8,6 +8,7 @@ import {
   type RunDetails,
   type RunState,
 } from "@/lib/api";
+import { PlanApproval } from "./PlanApproval";
 import { subscribeToRun } from "@/lib/stream";
 
 export function stateTone(state: RunState): "ok" | "bad" | "busy" | "idle" {
@@ -53,7 +54,13 @@ function RawJson({ value }: { value: JsonRecord }) {
   );
 }
 
-export function RunDetail({ details }: { details: RunDetails }) {
+export function RunDetail({
+  details,
+  approval,
+}: {
+  details: RunDetails;
+  approval?: React.ReactNode;
+}) {
   const { run, approved_by } = details;
   return (
     <div className="detail">
@@ -104,6 +111,7 @@ export function RunDetail({ details }: { details: RunDetails }) {
         <Section title="Plan">
           <p>{str(details.plan["goal"])}</p>
           <p className="muted">{str(details.plan["approach"])}</p>
+          {approval}
           <RawJson value={details.plan} />
         </Section>
       ) : null}
@@ -169,18 +177,20 @@ export interface RunLiveProps {
 export function RunLive({ apiBaseUrl, runId, initial, pollIntervalMs }: RunLiveProps) {
   const [details, setDetails] = useState<RunDetails>(initial);
 
+  const refresh = useCallback(() => {
+    createApiClient(apiBaseUrl)
+      .getRunDetails(runId)
+      .then(setDetails)
+      .catch(() => {
+        // A failed refetch leaves the last known state on screen.
+      });
+  }, [apiBaseUrl, runId]);
+
   useEffect(() => {
-    const client = createApiClient(apiBaseUrl);
     const options = pollIntervalMs === undefined ? {} : { pollIntervalMs };
     return subscribeToRun(apiBaseUrl, runId, {
       onStateChanged: () => {
-        client
-          .getRunDetails(runId)
-          .then(setDetails)
-          .catch(() => {
-            // A failed refetch leaves the last known state on screen;
-            // the next change retries.
-          });
+        refresh();
       },
       onStepAdded: (step) => {
         setDetails((prev) => ({
@@ -189,7 +199,19 @@ export function RunLive({ apiBaseUrl, runId, initial, pollIntervalMs }: RunLiveP
         }));
       },
     }, options);
-  }, [apiBaseUrl, runId, pollIntervalMs]);
+  }, [apiBaseUrl, runId, pollIntervalMs, refresh]);
 
-  return <RunDetail details={details} />;
+  return (
+    <RunDetail
+      details={details}
+      approval={
+        <PlanApproval
+          apiBaseUrl={apiBaseUrl}
+          runId={runId}
+          state={details.run.state}
+          onChanged={refresh}
+        />
+      }
+    />
+  );
 }
