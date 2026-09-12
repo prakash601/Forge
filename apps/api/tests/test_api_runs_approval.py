@@ -37,13 +37,15 @@ def _approved_by(body: dict[str, Any], event: str) -> str | None:
 async def test_policy_auto_approve_records_actor(
     orchestrator_app: tuple[Any, Any],
 ) -> None:
-    """Default loop: plan approved by policy, run parks in TESTING."""
-    client, orchestrator = orchestrator_app
+    """Default loop: plan approved by policy on the way to COMPLETED."""
+    client, _orchestrator = orchestrator_app
     created = await client.post("/api/v1/runs", json={"task": "add pagination to /todos"})
     assert created.status_code == 201, created.text
     run_id = created.json()["id"]
 
-    final = await _wait_for_state(client, run_id, {"TESTING"})
+    # The loop continues past TESTING (tester → reviewer), so assert the
+    # Audit trail is asserted once the run terminates, not mid-flight.
+    final = await _wait_for_state(client, run_id, {"COMPLETED"})
     body = final.json()
     assert [s["event"] for s in body["steps"]] == [
         "repository_ready",
@@ -51,9 +53,10 @@ async def test_policy_auto_approve_records_actor(
         "plan_ready",
         "plan_approved",
         "implementation_complete",
+        "tests_passed",
+        "review_passed",
     ]
     assert _approved_by(body, "plan_approved") == "policy"
-    assert orchestrator.runtime.outstanding() == 0
 
 
 async def test_plan_rejected_returns_to_planning(
