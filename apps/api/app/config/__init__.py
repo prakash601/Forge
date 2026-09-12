@@ -137,6 +137,12 @@ class Settings(BaseSettings):
             "(approved_by=policy). Phase 3 flips this for human approval UX."
         ),
     )
+    test_timeout_seconds: float = Field(
+        default=120.0,
+        validation_alias=AliasChoices("test_timeout_seconds", "FORGE_TEST_TIMEOUT_SECONDS"),
+        gt=0,
+        description="Per-command timeout for Tester pytest runs.",
+    )
     workspace_root: str = Field(
         default=str(_REPO_ROOT / ".forge-workspaces"),
         validation_alias=AliasChoices("workspace_root", "FORGE_WORKSPACE_ROOT"),

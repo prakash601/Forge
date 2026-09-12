@@ -7,11 +7,16 @@ class ToolPermissionError(PermissionError):
     """A tool call was denied by the agent permission table."""
 
 
-class ArchaeologistError(RuntimeError):
+class AgentError(RuntimeError):
+    """A Phase 2 agent failed (LLM, tools, or persistence)."""
+
+
+class ArchaeologistError(AgentError):
     """The Archaeologist agent failed (LLM, tools, or persistence)."""
 
 
 __all__ = [
+    "AgentError",
     "ArchaeologistError",
     "ToolPermissionError",
     "WorkspaceError",

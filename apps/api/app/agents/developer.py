@@ -18,7 +18,7 @@ from collections.abc import Awaitable, Callable
 from typing import Any
 
 from app.agents.errors import ArchaeologistError, WorkspaceError
-from app.agents.schemas import DeveloperProposal, DeveloperResult, Plan
+from app.agents.schemas import DebuggerDiagnosis, DeveloperProposal, DeveloperResult, Plan
 from app.agents.workspace import WorkspaceManager
 from app.core.logging import get_logger
 from app.llm.errors import LLMProviderError
@@ -45,6 +45,7 @@ class DeveloperAgent:
         workspaces: WorkspaceManager,
         save_fn: Callable[..., Awaitable[None]] | None = None,
         plan_provider: Callable[..., Awaitable[Any]] | None = None,
+        diagnosis_provider: Callable[..., Awaitable[Any]] | None = None,
         model: str | None = None,
         max_retries: int = _MAX_RETRIES,
     ) -> None:
@@ -52,11 +53,14 @@ class DeveloperAgent:
         self._workspaces = workspaces
         self._save_fn = save_fn
         self._plan_provider = plan_provider or _no_plan
+        self._diagnosis_provider = diagnosis_provider
         self._model = model
         self._max_retries = max(1, max_retries)
 
-    def _prompt(self, task: str, plan: Plan, repo_hint: str) -> str:
-        return (
+    def _prompt(
+        self, task: str, plan: Plan, repo_hint: str, diagnosis: DebuggerDiagnosis | None
+    ) -> str:
+        prompt = (
             "You are the Forge Developer. Implement the approved plan with "
             "minimal workspace-local edits. Return JSON matching the "
             "DeveloperProposal schema: edits (path, mode write|edit, "
@@ -71,6 +75,14 @@ class DeveloperAgent:
             f"Tests: {plan.tests}\nRisks: {plan.risks}\n"
             f"Workspace hint:\n{repo_hint[:2000]}"
         )
+        if diagnosis is not None:
+            prompt += (
+                "\nDebugger diagnosis to apply: "
+                f"root cause: {diagnosis.root_cause}; "
+                f"fix strategy: {diagnosis.fix_strategy}; "
+                f"evidence: {diagnosis.evidence[:5]}"
+            )
+        return prompt
 
     async def run(self, context: Any) -> str | None:
         task = str(getattr(context, "task", "") or "")
@@ -83,13 +95,26 @@ class DeveloperAgent:
             plan = None
         if plan is None:
             raise ArchaeologistError(f"developer has no approved plan for run {run_id}")
+        diagnosis: DebuggerDiagnosis | None = None
+        if self._diagnosis_provider is not None:
+            try:
+                candidate = await self._diagnosis_provider(run_id=run_id)
+                diagnosis = (
+                    candidate
+                    if isinstance(candidate, DebuggerDiagnosis)
+                    else DebuggerDiagnosis.model_validate(candidate)
+                    if candidate is not None
+                    else None
+                )
+            except Exception:
+                diagnosis = None
 
         workspace = self._workspaces.ensure(str(run_id))
         try:
             repo_hint = workspace.read_file("app/main.py", 3000)
         except WorkspaceError:
             repo_hint = ""
-        prompt = self._prompt(task, plan, repo_hint)
+        prompt = self._prompt(task, plan, repo_hint, diagnosis)
         allowed = set(plan.files_to_change) | set(plan.files_to_add)
 
         last_error: Exception | None = None
