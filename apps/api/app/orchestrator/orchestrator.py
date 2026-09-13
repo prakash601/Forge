@@ -32,6 +32,7 @@ from collections.abc import Awaitable, Callable
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.core.logging import get_logger
+from app.metrics.registry import record_run_event
 from app.orchestrator.context import AgentContext
 from app.orchestrator.protocols import Agent, Driver
 from app.orchestrator.runtime import InProcessRuntime
@@ -195,6 +196,7 @@ class Orchestrator:
                 session, run_id, next_event, request_id, approved_by=approved_by
             )
             if applied is not None:
+                record_run_event(event=next_event, approved_by=approved_by)
                 from_state, to_state = applied
                 # Re-fire the hook on the new state. Because
                 # ``handle_transition`` schedules a fresh task (not

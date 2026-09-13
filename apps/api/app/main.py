@@ -19,12 +19,14 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app import __version__
 from app.api.health import router as health_router
+from app.api.metrics import router as metrics_router
 from app.api.v1 import router as api_v1_router
 from app.config import Settings, get_settings
 from app.core.errors import install_exception_handlers
 from app.core.logging import configure_logging, get_logger
 from app.db.session import dispose_engine, get_session_factory, init_engine
 from app.memory.embeddings.registry import get_provider
+from app.metrics.middleware import metrics_middleware
 from app.orchestrator import Orchestrator, StateAgentRegistry
 from app.runs.enums import RunState
 
@@ -499,7 +501,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     )
 
     install_exception_handlers(app)
+    app.middleware("http")(metrics_middleware)
     app.include_router(health_router)
+    app.include_router(metrics_router)
     app.include_router(api_v1_router, prefix="/api/v1")
 
     return app

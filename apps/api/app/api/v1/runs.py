@@ -30,6 +30,7 @@ breaks dependency introspection in some FastAPI versions.
 import asyncio
 import uuid
 from collections.abc import AsyncIterator
+from datetime import UTC, datetime
 from pathlib import Path as FsPath
 from typing import Annotated
 
@@ -46,6 +47,7 @@ from app.db.session import get_session, get_session_factory
 from app.github.credentials import resolve_credential
 from app.github.errors import GitOperationError
 from app.github.repos import clone_repo, is_auth_failure, task_branch_name
+from app.metrics.registry import observe_run_duration, record_run_created, record_run_event
 from app.orchestrator.orchestrator import Orchestrator
 from app.projects.errors import ProjectNotFoundError
 from app.projects.models import Project
@@ -203,6 +205,7 @@ async def create_run_endpoint(
         await _clone_for_run(request, session, project=project, run_id=run.id, task=payload.task)
         await session.refresh(run)
     await session.commit()
+    record_run_created()
     log.info(
         "run_created",
         run_id=str(run.id),
@@ -291,6 +294,9 @@ async def apply_event_endpoint(
         ) from exc
 
     await session.commit()
+    record_run_event(event=payload.event, approved_by=approved_by)
+    if run.is_terminal:
+        observe_run_duration((datetime.now(UTC) - run.created_at).total_seconds())
     log.info(
         "run_event_applied",
         run_id=str(run_id),

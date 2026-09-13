@@ -172,3 +172,14 @@ jobs:
         # Proves infra/docker/sandbox.Dockerfile builds (Issue #017).
         # Registry push + digest reference ride the prod deploy (#019).
         run: docker build -f infra/docker/sandbox.Dockerfile -t forge-sandbox:ci .
+
+      - name: Validate prod stack
+        # Interpolation-proof: dummy env satisfies the required vars.
+        run: |
+          API_IMAGE=x WORKER_IMAGE=x WEB_IMAGE=x DOMAIN=x.example.com \
+          DATABASE_URL=postgresql://x GRAFANA_ADMIN_PASSWORD=x \
+          PUBLIC_URL=https://x.example.com \
+          docker compose -f docker-compose.prod.yml config -q
+          python3 -c "import json; d=json.load(open('infra/grafana/dashboards/forge.json')); assert len(d['panels'])==9"
+          python3 -c "open('infra/prometheus/prometheus.yml').read(); open('infra/prometheus/alerts.yml').read(); open('infra/caddy/Caddyfile').read()"
+          bash -n scripts/deploy.sh
