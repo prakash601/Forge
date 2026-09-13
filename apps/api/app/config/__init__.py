@@ -128,13 +128,15 @@ class Settings(BaseSettings):
         description="Default cap on LLM output tokens (cost control).",
     )
 
-    # ----- Planning / approval / workspaces (Issue #008) -----
+    # ----- Planning / approval / workspaces (Issue #008; default flipped in #020) -----
     auto_approve: bool = Field(
-        default=True,
+        default=False,
         validation_alias=AliasChoices("auto_approve", "FORGE_AUTO_APPROVE"),
         description=(
-            "When true, plans are policy-approved automatically "
-            "(approved_by=policy). Phase 3 flips this for human approval UX."
+            "v1.0 default: plans wait for human approval (approved_by=human). "
+            "When true, every plan is policy-approved (legacy behavior). "
+            "When false, only projects with auto_approve_policy set get "
+            "policy approval."
         ),
     )
     test_timeout_seconds: float = Field(

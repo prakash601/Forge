@@ -103,4 +103,9 @@ describe("RunDetail approval slot", () => {
     const plan = screen.getByText("Plan").closest("section");
     expect(plan?.textContent).toContain("approval-node");
   });
+
+  it("labels policy-approved runs as such", () => {
+    render(<RunDetail details={{ ...DETAILS_AWAITING, approved_by: "policy" }} />);
+    expect(screen.getByText(/approved by policy/)).toBeInTheDocument();
+  });
 });

@@ -25,6 +25,10 @@ class ProjectCreate(BaseModel):
 
     name: str = Field(min_length=1, max_length=255, description="Project name.")
     description: str | None = Field(default=None, description="Optional description.")
+    auto_approve_policy: bool = Field(
+        default=False,
+        description="Opt into machine policy plan approval (default: human gate).",
+    )
 
 
 class ProjectRead(BaseModel):
@@ -39,6 +43,7 @@ class ProjectRead(BaseModel):
     status: ProjectStatus
     repo_url: str | None = None
     default_branch: str = "main"
+    auto_approve_policy: bool = False
     created_at: datetime
     updated_at: datetime
 
@@ -76,4 +81,15 @@ class RepoRead(BaseModel):
     credential_set: bool = Field(description="Whether a credential is stored.")
 
 
-__all__ = ["ProjectCreate", "ProjectRead", "RepoConnectRequest", "RepoRead"]
+class ProjectPatch(BaseModel):
+    """Body for ``PATCH /api/v1/projects/{id}`` (all fields optional)."""
+
+    name: str | None = Field(default=None, min_length=1, max_length=255)
+    description: str | None = Field(default=None)
+    auto_approve_policy: bool | None = Field(
+        default=None,
+        description="Opt into/out of machine policy plan approval.",
+    )
+
+
+__all__ = ["ProjectCreate", "ProjectPatch", "ProjectRead", "RepoConnectRequest", "RepoRead"]

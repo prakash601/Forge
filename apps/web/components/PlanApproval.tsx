@@ -65,7 +65,10 @@ export function PlanApproval({ apiBaseUrl, runId, state, onChanged }: PlanApprov
           {error}
         </p>
       ) : null}
-      <p className="muted">Your decision is recorded as a human approval.</p>
+      <p className="muted">
+        Plans wait for your approval by default. Your decision is recorded as a human
+        approval.
+      </p>
     </div>
   );
 }
