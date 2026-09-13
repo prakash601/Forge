@@ -62,7 +62,7 @@ def install_exception_handlers(app: FastAPI) -> None:
     async def _http_exception_handler(
         request: Request, exc: StarletteHTTPException
     ) -> JSONResponse:
-        code = {
+        fallback = {
             400: "VALIDATION_ERROR",
             401: "AUTHENTICATION_ERROR",
             403: "AUTHORIZATION_ERROR",
@@ -70,8 +70,18 @@ def install_exception_handlers(app: FastAPI) -> None:
             409: "CONFLICT",
             422: "VALIDATION_ERROR",
             429: "RATE_LIMITED",
+            503: "SERVICE_UNAVAILABLE",
         }.get(exc.status_code, "INTERNAL_ERROR")
-        message = str(exc.detail) if exc.detail else "Request failed."
+        # Endpoints raise HTTPException with a {"code", "message",
+        # "request_id"} detail dict; honor its code so auth (and future)
+        # endpoints can surface specific codes (e.g. AUTH_NOT_CONFIGURED,
+        # OAUTH_FAILED) instead of the status fallback.
+        if isinstance(exc.detail, dict) and isinstance(exc.detail.get("code"), str):
+            code = exc.detail["code"]
+            message = str(exc.detail.get("message", "Request failed."))
+        else:
+            code = fallback
+            message = str(exc.detail) if exc.detail else "Request failed."
         log.warning(
             "http_exception",
             status_code=exc.status_code,
