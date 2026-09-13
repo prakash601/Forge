@@ -3,6 +3,7 @@
 import { useState } from "react";
 
 import { createApiClient, type RunState } from "@/lib/api";
+import { SessionExpired, isUnauthorized } from "@/components/SessionExpired";
 
 export type ApprovalEvent = "plan_approved" | "plan_rejected";
 
@@ -23,6 +24,7 @@ export interface PlanApprovalProps {
 export function PlanApproval({ apiBaseUrl, runId, state, onChanged }: PlanApprovalProps) {
   const [pending, setPending] = useState<ApprovalEvent | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [unauthorized, setUnauthorized] = useState(false);
 
   if (state !== "AWAITING_APPROVAL") {
     return null;
@@ -31,11 +33,16 @@ export function PlanApproval({ apiBaseUrl, runId, state, onChanged }: PlanApprov
   const act = async (event: ApprovalEvent) => {
     setPending(event);
     setError(null);
+    setUnauthorized(false);
     try {
       await createApiClient(apiBaseUrl).applyEvent(runId, event);
       onChanged();
     } catch (cause) {
-      setError(cause instanceof Error ? cause.message : String(cause));
+      if (isUnauthorized(cause)) {
+        setUnauthorized(true);
+      } else {
+        setError(cause instanceof Error ? cause.message : String(cause));
+      }
     } finally {
       setPending(null);
     }
@@ -65,6 +72,7 @@ export function PlanApproval({ apiBaseUrl, runId, state, onChanged }: PlanApprov
           {error}
         </p>
       ) : null}
+      {unauthorized ? <SessionExpired apiBaseUrl={apiBaseUrl} /> : null}
       <p className="muted">
         Plans wait for your approval by default. Your decision is recorded as a human
         approval.

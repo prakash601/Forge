@@ -1,6 +1,9 @@
 import Link from "next/link";
 
-import { createApiClient, type ReadyResponse, type Run } from "@/lib/api";
+import { createApiClient } from "@/lib/api";
+import { sessionCookie } from "@/lib/session";
+import { LoginPrompt } from "@/components/LoginButton";
+import { LogoutButton } from "@/components/LogoutButton";
 import { NewRunForm } from "@/components/NewRunForm";
 import { StateBadge } from "@/components/RunLive";
 
@@ -14,49 +17,74 @@ function apiBaseUrl(searchParams: HomePageProps["searchParams"]): string {
     : (process.env.API_BASE_URL ?? "http://localhost:8000");
 }
 
-async function checkBackend(baseUrl: string): Promise<ReadyResponse | null> {
-  try {
-    return await createApiClient(baseUrl).getReady();
-  } catch {
-    return null;
-  }
-}
-
-async function loadRuns(baseUrl: string): Promise<{ runs: Run[]; total: number } | null> {
-  try {
-    const { runs, total } = await createApiClient(baseUrl).listRuns(20, 0);
-    return { runs, total };
-  } catch {
-    return null;
-  }
-}
-
 export default async function Home({ searchParams }: HomePageProps) {
   const baseUrl = apiBaseUrl(searchParams);
-  const ready = await checkBackend(baseUrl);
-  const listing = await loadRuns(baseUrl);
+  const cookie = await sessionCookie();
+  const client = createApiClient(baseUrl, { cookie });
 
+  let ready = null;
+  try {
+    ready = await client.getReady();
+  } catch {
+    ready = null;
+  }
   const isConnected = ready?.status === "ok";
-  const statusClass = isConnected ? "connected" : "disconnected";
-  const statusText = isConnected
-    ? `Connected to API (v${ready?.version ?? "?"})`
-    : `Cannot reach API at ${baseUrl}`;
+
+  let me = null;
+  try {
+    me = await client.getMe();
+  } catch {
+    // Logged out or unreachable: the login prompt covers both (the
+    // status indicator above tells them apart).
+    me = null;
+  }
+
+  if (me === null) {
+    return (
+      <main className="dashboard">
+        <span className="phase">
+          <span className="dot" />
+          Phase 4 — Public MVP
+        </span>
+        <h1>Forge</h1>
+        <div className={`status ${isConnected ? "connected" : "disconnected"}`}>
+          <span className="indicator" />
+          <span>
+            {isConnected
+              ? `Connected to API (v${ready?.version ?? "?"})`
+              : `Cannot reach API at ${baseUrl}`}
+          </span>
+        </div>
+        <LoginPrompt apiBaseUrl={baseUrl} />
+      </main>
+    );
+  }
+
+  const [projects, listing] = await Promise.all([
+    client.listProjects().catch(() => null),
+    client.listRuns(20, 0).catch(() => null),
+  ]);
 
   return (
     <main className="dashboard">
       <span className="phase">
         <span className="dot" />
-        Phase 3 — MVP Polish &amp; UX
+        Phase 4 — Public MVP
       </span>
       <h1>Forge</h1>
-      <div className={`status ${statusClass}`}>
+      <div className={`status ${isConnected ? "connected" : "disconnected"}`}>
         <span className="indicator" />
-        <span>{statusText}</span>
+        <span>
+          {isConnected
+            ? `Connected to API (v${ready?.version ?? "?"})`
+            : `Cannot reach API at ${baseUrl}`}
+        </span>{" "}
+        <LogoutButton apiBaseUrl={baseUrl} email={me.email} />
       </div>
 
       <section className="panel">
         <h2>New run</h2>
-        <NewRunForm apiBaseUrl={baseUrl} />
+        <NewRunForm apiBaseUrl={baseUrl} projects={projects ?? []} />
       </section>
 
       <section className="panel runs">
@@ -64,7 +92,7 @@ export default async function Home({ searchParams }: HomePageProps) {
         {!listing ? (
           <p className="muted">Could not load runs from the API.</p>
         ) : listing.runs.length === 0 ? (
-          <p className="muted">No runs yet. Create one via POST /api/v1/runs.</p>
+          <p className="muted">No runs yet. Describe a task above to start one.</p>
         ) : (
           <ul className="run-list">
             {listing.runs.map((run) => (

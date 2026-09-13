@@ -190,6 +190,14 @@ class Settings(BaseSettings):
         gt=0,
         description="Session JWT lifetime in seconds (default 24h).",
     )
+    web_base_url: str = Field(
+        default="http://localhost:3000",
+        validation_alias=AliasChoices("web_base_url", "FORGE_WEB_BASE_URL", "WEB_BASE_URL"),
+        description=(
+            "Dashboard origin. OAuth callback redirects land here only; "
+            "any other destination falls back to JSON."
+        ),
+    )
 
     @field_validator("cors_allow_origins", mode="before")
     @classmethod

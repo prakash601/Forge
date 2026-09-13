@@ -85,9 +85,12 @@ def _set_session_cookie(response: Response, *, token: str, request: Request) -> 
 async def github_login(
     request: Request,
     client: Annotated[GitHubOAuthClient, Depends(get_oauth_client)],
+    next: str | None = None,
 ) -> Response:
     settings = request.app.state.settings
-    state = secrets.token_urlsafe(16)
+    # Landing is validated here AND at the callback (defense in depth):
+    # an invalid `next` degrades to an unbound random state.
+    state = _landing_url(request, next) or secrets.token_urlsafe(16)
     url = client.login_url(redirect_uri=settings.github_oauth_callback_url, state=state)
     return Response(status_code=status.HTTP_307_TEMPORARY_REDIRECT, headers={"location": url})
 
@@ -108,6 +111,7 @@ async def github_callback(
     session: Annotated[AsyncSession, Depends(get_session)],
     client: Annotated[GitHubOAuthClient, Depends(get_oauth_client)],
     code: str,
+    state: str | None = None,
 ) -> Response:
     settings = request.app.state.settings
     if not settings.jwt_secret:
@@ -145,10 +149,37 @@ async def github_callback(
         ) from exc
     await session.commit()
     log.info("user_logged_in", user_id=str(user.id), request_id=request.state.request_id)
+    landing = _landing_url(request, state)
+    if landing is not None:
+        # Browser flow (Phase 4, #022): back to the dashboard, session set.
+        redirect = Response(
+            status_code=status.HTTP_307_TEMPORARY_REDIRECT,
+            headers={"location": landing},
+        )
+        _set_session_cookie(redirect, token=token, request=request)
+        return redirect
     body = UserRead.model_validate(user).model_dump_json().encode("utf-8")
     response = Response(content=body, media_type="application/json")
     _set_session_cookie(response, token=token, request=request)
     return response
+
+
+def _landing_url(request: Request, state: str | None) -> str | None:
+    """Validate an OAuth ``state`` as a dashboard landing URL.
+
+    Only absolute URLs under the configured web origin are accepted
+    (bare origin included); anything else falls back to the JSON
+    response (no open redirect).
+    """
+    if not state:
+        return None
+    base: str = request.app.state.settings.web_base_url.rstrip("/")
+    candidate = state.strip()
+    if candidate == base:
+        return base + "/"
+    if not candidate.startswith(base + "/") or "//" in candidate[len(base) :]:
+        return None
+    return candidate
 
 
 @router.get(
