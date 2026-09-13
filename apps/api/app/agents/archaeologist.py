@@ -28,7 +28,7 @@ _MAX_RETRIES = 2
 _FOCUS_FILES = ("app/main.py", "tests/test_todos.py", "requirements.txt", "README.md")
 
 
-async def _default_memory() -> list[str]:
+async def _default_memory(run_id: uuid.UUID | None = None) -> list[str]:
     return []
 
 
@@ -43,7 +43,7 @@ class ArchaeologistAgent:
         llm: Any,
         repo_root: Path,
         save_fn: Callable[..., Awaitable[None]] | None = None,
-        memory_reader: Callable[[], Awaitable[list[str]]] | None = None,
+        memory_reader: Callable[..., Awaitable[list[str]]] | None = None,
         model: str | None = None,
         max_retries: int = _MAX_RETRIES,
     ) -> None:
@@ -98,7 +98,7 @@ class ArchaeologistAgent:
         run_id = getattr(context, "run_id", None)
         request_id = str(getattr(context, "request_id", ""))
         try:
-            memory = await self._memory_reader()
+            memory = await self._memory_reader(run_id=run_id)
         except Exception:
             memory = []
         evidence = self._evidence(task)

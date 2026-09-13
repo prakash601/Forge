@@ -81,6 +81,27 @@ async def get_project(session: AsyncSession, project_id: uuid.UUID) -> Project:
     return project
 
 
+async def get_owned_project(
+    session: AsyncSession, project_id: uuid.UUID, owner_id: uuid.UUID
+) -> Project:
+    """Return the project when ``owner_id`` owns it (else 404).
+
+    Raises :class:`ProjectNotFoundError` when the project does not
+    exist or belongs to another owner. Missing and forbidden are
+    deliberately indistinguishable (Phase 4, Issue #016).
+    """
+    project = await get_project(session, project_id)
+    if project.owner_id != owner_id:
+        raise ProjectNotFoundError(str(project_id))
+    return project
+
+
+async def list_owned_project_ids(session: AsyncSession, owner_id: uuid.UUID) -> list[uuid.UUID]:
+    """Return the ids of all projects owned by ``owner_id``."""
+    result = await session.execute(select(Project.id).where(Project.owner_id == owner_id))
+    return list(result.scalars().all())
+
+
 async def list_projects_for_owner(
     session: AsyncSession,
     owner_id: uuid.UUID,
@@ -114,4 +135,10 @@ async def list_projects_for_owner(
     return list(result.scalars().all())
 
 
-__all__ = ["create_project", "get_project", "list_projects_for_owner"]
+__all__ = [
+    "create_project",
+    "get_owned_project",
+    "get_project",
+    "list_owned_project_ids",
+    "list_projects_for_owner",
+]

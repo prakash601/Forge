@@ -10,6 +10,8 @@ from __future__ import annotations
 import asyncio
 from typing import Any
 
+from tests.conftest import ensure_project
+
 
 async def _wait_for_state(
     client: Any, run_id: str, states: set[str], *, timeout_s: float = 15.0
@@ -39,7 +41,11 @@ async def test_policy_auto_approve_records_actor(
 ) -> None:
     """Default loop: plan approved by policy on the way to COMPLETED."""
     client, _orchestrator = orchestrator_app
-    created = await client.post("/api/v1/runs", json={"task": "add pagination to /todos"})
+    project = await ensure_project(client)
+    created = await client.post(
+        "/api/v1/runs",
+        json={"task": "add pagination to /todos", "project_id": project["id"]},
+    )
     assert created.status_code == 201, created.text
     run_id = created.json()["id"]
 
@@ -64,7 +70,11 @@ async def test_plan_rejected_returns_to_planning(
 ) -> None:
     """A human can send the Run back from AWAITING_APPROVAL to PLANNING."""
     client, _orchestrator = manual_approval_app
-    created = await client.post("/api/v1/runs", json={"task": "add pagination to /todos"})
+    project = await ensure_project(client)
+    created = await client.post(
+        "/api/v1/runs",
+        json={"task": "add pagination to /todos", "project_id": project["id"]},
+    )
     assert created.status_code == 201, created.text
     run_id = created.json()["id"]
 
@@ -81,7 +91,11 @@ async def test_human_approval_records_actor(
 ) -> None:
     """Explicit HTTP approval records approved_by=human, then work proceeds."""
     client, _orchestrator = manual_approval_app
-    created = await client.post("/api/v1/runs", json={"task": "add pagination to /todos"})
+    project = await ensure_project(client)
+    created = await client.post(
+        "/api/v1/runs",
+        json={"task": "add pagination to /todos", "project_id": project["id"]},
+    )
     assert created.status_code == 201, created.text
     run_id = created.json()["id"]
 

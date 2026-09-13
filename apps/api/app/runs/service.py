@@ -57,13 +57,23 @@ def _coerce_event(raw: str) -> RunEvent:
         raise UnknownEventError(raw) from exc
 
 
-async def create_run(session: AsyncSession, *, task: str) -> Run:
+async def create_run(
+    session: AsyncSession,
+    *,
+    task: str,
+    project_id: uuid.UUID | None = None,
+) -> Run:
     """Create a new Run in state ``CREATED``.
 
     The ``task`` is the free-form description of the work the user wants
     Forge to do. It is stored verbatim; we do not parse or validate it
     in this issue (a later issue owns task validation per
     ``DATABASE_DESIGN_v0.1.md``).
+
+    ``project_id`` is optional at the service layer so pre-existing
+    callers keep working; the API layer requires it for all new runs
+    (Phase 4, Issue #016). ``None`` means a legacy ownerless run,
+    hidden from non-admin reads.
     """
     if not task or not task.strip():
         raise ValueError("task must be a non-empty string")
@@ -73,6 +83,7 @@ async def create_run(session: AsyncSession, *, task: str) -> Run:
         state=RunState.CREATED,
         is_terminal=False,
         task=task,
+        project_id=project_id,
         version=0,
         created_at=now,
         updated_at=now,
@@ -87,6 +98,27 @@ async def get_run(session: AsyncSession, run_id: uuid.UUID) -> Run:
     run = await session.get(Run, run_id)
     if run is None:
         raise RunNotFoundError(str(run_id))
+    return run
+
+
+async def get_owned_run(session: AsyncSession, run_id: uuid.UUID, owner_id: uuid.UUID) -> Run:
+    """Return the Run when ``owner_id`` owns its project (else 404).
+
+    Raises :class:`RunNotFoundError` when the run does not exist, has
+    no project (legacy ownerless row), or belongs to another owner's
+    project. Missing and forbidden are deliberately indistinguishable
+    (Phase 4, Issue #016).
+    """
+    from app.projects.errors import ProjectNotFoundError
+    from app.projects.service import get_owned_project
+
+    run = await get_run(session, run_id)
+    if run.project_id is None:
+        raise RunNotFoundError(str(run_id))
+    try:
+        await get_owned_project(session, run.project_id, owner_id)
+    except ProjectNotFoundError as exc:
+        raise RunNotFoundError(str(run_id)) from exc
     return run
 
 
@@ -208,23 +240,35 @@ async def transition(
     return refreshed
 
 
-__all__ = ["create_run", "get_run", "transition"]
+__all__ = ["create_run", "get_owned_run", "get_run", "transition"]
 
 
 async def list_runs(
-    session: AsyncSession, *, limit: int = 20, offset: int = 0
+    session: AsyncSession,
+    *,
+    limit: int = 20,
+    offset: int = 0,
+    project_ids: list[uuid.UUID] | None = None,
 ) -> tuple[list[Run], int]:
-    """List runs newest-first with total count (dashboard foundation)."""
+    """List runs newest-first with total count (dashboard foundation).
+
+    When ``project_ids`` is given, only runs in those projects are
+    returned (callers pass the caller's owned project ids; an empty
+    list yields an empty page). ``None`` preserves the legacy global
+    listing for service-level callers; the API layer always scopes.
+    """
     bounded_limit = min(max(1, limit), 100)
     bounded_offset = max(0, offset)
-    total = (await session.execute(select(func.count()).select_from(Run))).scalar_one()
+    base = select(Run)
+    count_base = select(func.count()).select_from(Run)
+    if project_ids is not None:
+        base = base.where(Run.project_id.in_(project_ids))
+        count_base = count_base.where(Run.project_id.in_(project_ids))
+    total = (await session.execute(count_base)).scalar_one()
     rows = (
         (
             await session.execute(
-                select(Run)
-                .order_by(Run.created_at.desc())
-                .limit(bounded_limit)
-                .offset(bounded_offset)
+                base.order_by(Run.created_at.desc()).limit(bounded_limit).offset(bounded_offset)
             )
         )
         .scalars()

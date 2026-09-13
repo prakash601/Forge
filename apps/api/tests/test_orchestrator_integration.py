@@ -23,6 +23,7 @@ from httpx import AsyncClient
 
 from app.orchestrator import Orchestrator
 from app.runs.enums import RunState
+from tests.conftest import ensure_project
 
 # ---------------------------------------------------------------------------
 # End-to-end: Phase 2 loop walks CREATED -> ... -> COMPLETED.
@@ -39,8 +40,11 @@ async def test_create_run_drives_loop_to_completed(
     exit criteria live in test_e2e_pagination.py.)
     """
     client, orchestrator = orchestrator_app
-
-    response = await client.post("/api/v1/runs", json={"task": "smoke test for orchestrator"})
+    project = await ensure_project(client)
+    response = await client.post(
+        "/api/v1/runs",
+        json={"task": "smoke test for orchestrator", "project_id": project["id"]},
+    )
     assert response.status_code == 201, response.text
     run_id = response.json()["id"]
 
@@ -67,17 +71,18 @@ async def test_create_run_drives_loop_to_completed(
 
 
 async def test_create_run_does_not_invoke_orchestrator_when_uninstalled(
-    app_instance: Any,
+    authed_client: AsyncClient,
 ) -> None:
-    """Existing Issue #001 tests build the app without an orchestrator.
+    """Apps built without an orchestrator still serve the API.
 
-    Verify the API still works in that configuration.
+    ``authed_client`` installs no orchestrator (like the Issue #001
+    ``app_instance`` configuration), so the run stays in CREATED.
     """
-    from httpx import ASGITransport, AsyncClient
-
-    transport = ASGITransport(app=app_instance)
-    async with AsyncClient(transport=transport, base_url="http://testserver") as client:
-        response = await client.post("/api/v1/runs", json={"task": "no orchestrator"})
+    project = await ensure_project(authed_client)
+    response = await authed_client.post(
+        "/api/v1/runs",
+        json={"task": "no orchestrator", "project_id": project["id"]},
+    )
     assert response.status_code == 201
     # Without the orchestrator, the run stays in CREATED.
     assert response.json()["state"] == "CREATED"
@@ -89,7 +94,10 @@ async def test_external_event_application_drives_orchestrator(
     """Manually applying an event for a parked run advances it."""
     client, _orchestrator = orchestrator_app
     # First create + wait for the loop to terminate.
-    create = await client.post("/api/v1/runs", json={"task": "manual event"})
+    project = await ensure_project(client)
+    create = await client.post(
+        "/api/v1/runs", json={"task": "manual event", "project_id": project["id"]}
+    )
     assert create.status_code == 201
     run_id = create.json()["id"]
     await _wait_for_state(client, run_id, {"COMPLETED"}, timeout_s=60.0)

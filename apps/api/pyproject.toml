@@ -66,11 +66,12 @@ ignore = [
 "app/projects/enums.py" = ["UP042"]  # Same.
 "app/memory/enums.py" = ["UP042"]  # Same.
 "app/orchestrator/runtime.py" = ["S110", "ASYNC109"]  # Best-effort coroutine close; explicit asyncio.wait timeout is intentional.
-"tests/conftest.py" = ["ASYNC240", "S110"]  # Path() at startup; best-effort container teardown.
+"tests/conftest.py" = ["ASYNC240", "S110", "S105", "S106"]  # Path() at startup; best-effort container teardown; canned OAuth settings.
 "app/auth/**" = ["S105", "S106"]  # Token/secret plumbing is this package's job; no hardcoded secrets.
 "app/github/**" = ["S105", "S106"]  # Credential seam; tokens arrive at runtime, never hardcoded.
 "tests/test_auth_*.py" = ["S105", "S106"]  # Canned test credentials only, never real secrets.
 "tests/test_api_auth.py" = ["S105", "S106"]  # Same: canned OAuth settings for the fake client.
+"tests/test_api_tenancy.py" = ["S105", "S106"]  # Same: two-identity fake OAuth settings.
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"

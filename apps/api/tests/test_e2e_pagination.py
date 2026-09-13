@@ -12,6 +12,8 @@ import asyncio
 import uuid
 from typing import Any
 
+from tests.conftest import ensure_project
+
 
 async def _wait_for_state(
     client: Any, run_id: str, states: set[str], *, timeout_s: float = 60.0
@@ -37,7 +39,11 @@ async def test_pagination_completes_end_to_end(
     from app.agents.service import get_memory, get_review, get_test_result
 
     client, orchestrator = orchestrator_app
-    created = await client.post("/api/v1/runs", json={"task": "add pagination to /todos"})
+    project = await ensure_project(client)
+    created = await client.post(
+        "/api/v1/runs",
+        json={"task": "add pagination to /todos", "project_id": project["id"]},
+    )
     assert created.status_code == 201, created.text
     run_id = created.json()["id"]
 

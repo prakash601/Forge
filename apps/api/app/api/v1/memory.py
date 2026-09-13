@@ -15,12 +15,15 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, HTTPException, Path, Query, Request, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.auth.dependencies import get_current_user
 from app.core.logging import get_logger
 from app.db.session import get_session
 from app.memory import service
 from app.memory.enums import MemoryStatus
 from app.memory.schemas import MemoryItemCreate, MemoryItemList, MemoryItemRead
 from app.projects.errors import ProjectNotFoundError
+from app.projects.service import get_owned_project
+from app.users.models import User
 
 router = APIRouter(prefix="/projects/{project_id}/memory", tags=["memory"])
 log = get_logger(__name__)
@@ -84,9 +87,11 @@ async def create_memory_item_endpoint(
     request: Request,
     payload: MemoryItemCreate,
     session: Annotated[AsyncSession, Depends(get_session)],
+    current_user: Annotated[User, Depends(get_current_user)],
     project_id: Annotated[uuid.UUID, Path(description="Project identifier (UUID).")],
 ) -> MemoryItemRead:
     try:
+        await get_owned_project(session, project_id, current_user.id)
         item = await service.create_memory_item(
             session,
             project_id=project_id,
@@ -130,6 +135,7 @@ async def create_memory_item_endpoint(
 async def list_memory_items_endpoint(
     request: Request,
     session: Annotated[AsyncSession, Depends(get_session)],
+    current_user: Annotated[User, Depends(get_current_user)],
     project_id: Annotated[uuid.UUID, Path(description="Project identifier (UUID).")],
     status_filter: Annotated[
         MemoryStatus | None,
@@ -139,6 +145,7 @@ async def list_memory_items_endpoint(
     offset: Annotated[int, Query(ge=0)] = 0,
 ) -> MemoryItemList:
     try:
+        await get_owned_project(session, project_id, current_user.id)
         items = await service.list_memory_items_for_project(
             session,
             project_id,

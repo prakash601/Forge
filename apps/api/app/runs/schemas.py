@@ -42,6 +42,9 @@ class RunRead(BaseModel):
     state: RunState
     is_terminal: bool
     task: str
+    project_id: uuid.UUID | None = Field(
+        default=None, description="Owning project; null for legacy ownerless runs."
+    )
     version: int
     created_at: datetime
     updated_at: datetime
@@ -55,6 +58,9 @@ class RunCreateRequest(BaseModel):
         min_length=1,
         max_length=10_000,
         description="Free-form description of the engineering task.",
+    )
+    project_id: uuid.UUID = Field(
+        description="Owning project (must belong to the caller).",
     )
 
 

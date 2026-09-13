@@ -10,6 +10,7 @@ application. It is reused by:
 
 from __future__ import annotations
 
+import uuid
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 
@@ -101,12 +102,24 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             finally:
                 await session.close()
 
-        async def _load_memory() -> list[str]:
+        async def _load_memory(run_id: uuid.UUID | None = None) -> list[str]:
             from app.agents.service import get_latest_memory
+            from app.runs.service import get_run
 
             session = factory()
             try:
-                row = await get_latest_memory(session)
+                # Fail closed: without a run (or a project on it) there
+                # is no memory — a global fallback would leak one
+                # owner's outcomes into another's archaeology (#016).
+                if run_id is None:
+                    return []
+                try:
+                    run = await get_run(session, run_id)
+                except Exception:
+                    return []
+                if run.project_id is None:
+                    return []
+                row = await get_latest_memory(session, project_id=run.project_id)
                 if row is None:
                     return []
                 return [
