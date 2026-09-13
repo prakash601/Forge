@@ -47,6 +47,7 @@ class Run(Base):
             "updated_at",
             postgresql_where=text("is_terminal = FALSE"),
         ),
+        Index("runs_project_id_idx", "project_id"),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(
@@ -67,6 +68,14 @@ class Run(Base):
     )
     is_terminal: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     task: Mapped[str] = mapped_column(Text, nullable=False)
+    # Project ownership (Phase 4, Issue #016; migration 0011). NULL for
+    # pre-existing rows (hidden from non-admin reads); set on all new
+    # creates (enforced at the API layer).
+    project_id: Mapped[uuid.UUID | None] = mapped_column(
+        PG_UUID(as_uuid=True),
+        ForeignKey("projects.id", ondelete="CASCADE"),
+        nullable=True,
+    )
     version: Mapped[int] = mapped_column(BigInteger, nullable=False, default=0)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)

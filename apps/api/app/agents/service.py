@@ -265,9 +265,23 @@ async def get_memory(session: AsyncSession, run_id: uuid.UUID) -> RunMemory | No
     return result.scalars().first()
 
 
-async def get_latest_memory(session: AsyncSession) -> RunMemory | None:
-    """Most recent outcome candidates across runs (next-run memory)."""
+async def get_latest_memory(session: AsyncSession, *, project_id: uuid.UUID) -> RunMemory | None:
+    """Most recent outcome candidates for runs in ``project_id``.
+
+    Scoped per project (Phase 4, Issue #016): memory from one owner's
+    runs never leaks into another owner's archaeology. There is no
+    global fallback — callers without a project pass nothing and get
+    nothing (fail closed).
+    """
     from sqlalchemy import desc
 
-    result = await session.execute(select(RunMemory).order_by(desc(RunMemory.created_at)).limit(1))
+    from app.runs.models import Run
+
+    result = await session.execute(
+        select(RunMemory)
+        .join(Run, RunMemory.run_id == Run.id)
+        .where(Run.project_id == project_id)
+        .order_by(desc(RunMemory.created_at))
+        .limit(1)
+    )
     return result.scalars().first()

@@ -1,9 +1,8 @@
 """HTTP endpoints for users (v1, minimal).
 
-Issue #003 ships only the minimum surface needed to create a project
-owner: ``POST /api/v1/users`` and ``GET /api/v1/users/{id}``. The
-full user-management surface (sessions, OAuth, password reset)
-belongs to a separate issue.
+``POST /api/v1/users`` is open (public signup). ``GET
+/api/v1/users/{id}`` is self-only (Phase 4, Issue #016): any other id
+is 404, indistinguishable from missing.
 """
 
 import uuid
@@ -14,10 +13,12 @@ from pydantic import ValidationError
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.auth.dependencies import get_current_user
 from app.core.logging import get_logger
 from app.db.session import get_session
 from app.users import service
 from app.users.errors import DuplicateUserEmailError, UserNotFoundError
+from app.users.models import User
 from app.users.schemas import UserCreate, UserRead
 
 router = APIRouter(prefix="/users", tags=["users"])
@@ -64,14 +65,25 @@ async def create_user_endpoint(
     "/{user_id}",
     response_model=UserRead,
     status_code=status.HTTP_200_OK,
-    summary="Read a user by id.",
-    responses={404: {"description": "User does not exist."}},
+    summary="Read the caller (self-only).",
+    responses={404: {"description": "User does not exist or is not the caller."}},
 )
 async def read_user_endpoint(
     request: Request,
     session: Annotated[AsyncSession, Depends(get_session)],
+    current_user: Annotated[User, Depends(get_current_user)],
     user_id: Annotated[uuid.UUID, Path(description="User identifier (UUID).")],
 ) -> UserRead:
+    if user_id != current_user.id:
+        await session.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail={
+                "code": "RESOURCE_NOT_FOUND",
+                "message": f"User {user_id!r} does not exist.",
+                "request_id": request.state.request_id,
+            },
+        )
     try:
         user = await service.get_user(session, user_id)
     except UserNotFoundError as exc:

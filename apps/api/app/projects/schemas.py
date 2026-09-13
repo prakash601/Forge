@@ -16,9 +16,13 @@ from app.projects.enums import ProjectStatus
 
 
 class ProjectCreate(BaseModel):
-    """Body for ``POST /api/v1/projects``."""
+    """Body for ``POST /api/v1/projects``.
 
-    owner_id: uuid.UUID = Field(description="UUID of the owning user.")
+    Ownership derives from the session (Phase 4, Issue #016); there is
+    no owner field to spoof. Payloads that still send ``owner_id`` keep
+    validating (extra fields are ignored) but it has no effect.
+    """
+
     name: str = Field(min_length=1, max_length=255, description="Project name.")
     description: str | None = Field(default=None, description="Optional description.")
 

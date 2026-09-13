@@ -15,12 +15,10 @@ async def test_unknown_route_returns_envelope(client: AsyncClient) -> None:
 
 
 async def test_validation_error_returns_envelope(client: AsyncClient) -> None:
-    # Hit a future v1 route. Even an empty v1 router will produce a 404 here;
-    # the 404 path already exercises the error envelope, so we re-use it.
-    response = await client.post("/api/v1/projects", json={"name": ""})
-    # Either 404 (no routes registered) or 422 (if a route exists); both must
-    # use the envelope.
-    assert response.status_code in (404, 422)
+    # Signup validation is open (no session needed): an invalid email
+    # exercises the 422 envelope path.
+    response = await client.post("/api/v1/users", json={"email": "not-an-email"})
+    assert response.status_code == 422
     body = response.json()
     assert "error" in body
     assert "code" in body["error"]

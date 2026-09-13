@@ -29,20 +29,25 @@ async def _collect(client: Any, run_id: str) -> list[tuple[str, Any]]:
     return events
 
 
-async def test_stream_unknown_run_is_404(client: Any) -> None:
-    response = await client.get(f"/api/v1/runs/{uuid.uuid4()}/stream")
+async def test_stream_unknown_run_is_404(authed_client: Any) -> None:
+    response = await authed_client.get(f"/api/v1/runs/{uuid.uuid4()}/stream")
     assert response.status_code == 404
 
 
-async def test_stream_replays_walk_and_closes_on_terminal(client: Any) -> None:
-    created = await client.post("/api/v1/runs", json={"task": "stream me"})
+async def test_stream_replays_walk_and_closes_on_terminal(authed_client: Any) -> None:
+    from tests.conftest import ensure_project
+
+    project = await ensure_project(authed_client)
+    created = await authed_client.post(
+        "/api/v1/runs", json={"task": "stream me", "project_id": project["id"]}
+    )
     assert created.status_code == 201, created.text
     run_id = created.json()["id"]
 
-    collector = asyncio.create_task(_collect(client, run_id))
+    collector = asyncio.create_task(_collect(authed_client, run_id))
     await asyncio.sleep(0.3)  # let the snapshot flush before driving events
     for event in ("repository_ready", "analysis_complete", "cancel"):
-        applied = await client.post(f"/api/v1/runs/{run_id}/events", json={"event": event})
+        applied = await authed_client.post(f"/api/v1/runs/{run_id}/events", json={"event": event})
         assert applied.status_code == 200, applied.text
         await asyncio.sleep(0.3)
 

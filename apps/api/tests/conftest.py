@@ -267,6 +267,78 @@ async def client(app_instance: Any) -> AsyncIterator[AsyncClient]:
         yield ac
 
 
+@pytest_asyncio.fixture
+async def auth_settings(postgres_engine_url: str) -> Any:
+    """Settings with auth configured (GitHub OAuth test creds + JWT).
+
+    Uses the fake OAuth client via dependency override in the fixtures
+    below — no network, ever. The plain ``app_settings`` fixture stays
+    unconfigured so 503-path tests keep working.
+    """
+    from cryptography.fernet import Fernet
+
+    from app.config import Settings
+
+    return Settings(
+        database_url=postgres_engine_url,
+        environment="test",
+        log_level="WARNING",
+        github_client_id="test-client-id",
+        github_client_secret="test-client-secret",
+        jwt_secret="test-jwt-secret-for-suite-use-only",
+        credentials_key=Fernet.generate_key().decode(),
+    )
+
+
+@pytest_asyncio.fixture
+async def authed_client(auth_settings: Any, engine: AsyncEngine) -> AsyncIterator[AsyncClient]:
+    """Logged-in client (session cookie set via the fake OAuth callback).
+
+    Takes ``engine`` (unused) to force truncation-before-login ordering:
+    without it, a test combining this fixture with ``session``/``engine``
+    would wipe the login user at the other fixture's setup.
+    """
+    from app.api.v1.auth import get_oauth_client
+    from app.auth.github import FakeGitHubOAuthClient
+    from app.config import get_settings
+    from app.db import session as db_session
+    from app.main import create_app
+
+    _ = engine
+    get_settings.cache_clear()
+    db_session.init_engine(auth_settings)
+    try:
+        factory = db_session.get_session_factory()
+        eng = factory.kw["bind"]
+        assert isinstance(eng, AsyncEngine)
+        await _truncate_all(eng)
+        app = create_app(auth_settings)
+        app.dependency_overrides[get_oauth_client] = lambda: FakeGitHubOAuthClient()
+        transport = ASGITransport(app=app)
+        async with AsyncClient(transport=transport, base_url="http://testserver") as ac:
+            login = await ac.get("/api/v1/auth/github/callback?code=any")
+            assert login.status_code == 200, login.text
+            yield ac
+    finally:
+        await db_session.dispose_engine()
+
+
+@pytest_asyncio.fixture
+async def owned_project(authed_client: AsyncClient) -> dict[str, Any]:
+    """A project owned by the logged-in caller, via the API."""
+    project = await ensure_project(authed_client)
+    me = (await authed_client.get("/api/v1/auth/me")).json()
+    return {"user": me, "project": project}
+
+
+async def ensure_project(client: AsyncClient, name: str = "tenancy-probe") -> dict[str, Any]:
+    """Create a project for the logged-in caller; return its JSON."""
+    response = await client.post("/api/v1/projects", json={"name": name})
+    assert response.status_code == 201, response.text
+    data: dict[str, Any] = response.json()
+    return data
+
+
 FIXTURE_ROOT = Path(__file__).resolve().parents[3] / "fixtures" / "todo-app"
 
 
@@ -614,24 +686,32 @@ def _wire_test_agents(registry: Any, factory: Any, workspace_root: Path) -> None
 
 @pytest_asyncio.fixture
 async def orchestrator_app(
-    app_settings: Any, tmp_path: Path
+    auth_settings: Any, engine: AsyncEngine, tmp_path: Path
 ) -> AsyncIterator[tuple[AsyncClient, Orchestrator]]:
     """Full Phase 2 loop with policy auto-approval (default settings).
 
     The walk now ends parked in TESTING (Tester lands in #009).
+    The client is logged in (fake OAuth) so tenancy-enforced routes
+    (#016) work; create a project via ``ensure_project`` before
+    POSTing runs. Takes ``engine`` (unused) to force
+    truncation-before-login ordering (see ``authed_client``).
     """
     from app.config import get_settings
 
+    _ = engine
     get_settings.cache_clear()
 
     from app.agents.policy import PolicyAutoApproveAgent
+    from app.api.v1.auth import get_oauth_client
+    from app.auth.github import FakeGitHubOAuthClient
     from app.db import session as db_session
     from app.main import create_app
     from app.orchestrator import Orchestrator, StateAgentRegistry
     from app.runs.enums import RunState as _RunState
 
-    db_session.init_engine(app_settings)
-    app = create_app(app_settings)
+    db_session.init_engine(auth_settings)
+    app = create_app(auth_settings)
+    app.dependency_overrides[get_oauth_client] = lambda: FakeGitHubOAuthClient()
     factory = db_session.get_session_factory()
     registry = StateAgentRegistry()
     _wire_test_agents(registry, factory, tmp_path / "workspaces")
@@ -644,6 +724,8 @@ async def orchestrator_app(
     try:
         transport = ASGITransport(app=app)
         async with AsyncClient(transport=transport, base_url="http://testserver") as ac:
+            login = await ac.get("/api/v1/auth/github/callback?code=any")
+            assert login.status_code == 200, login.text
             yield ac, orchestrator
     finally:
         await orchestrator.shutdown()
@@ -652,23 +734,30 @@ async def orchestrator_app(
 
 @pytest_asyncio.fixture
 async def manual_approval_app(
-    app_settings: Any, tmp_path: Path
+    auth_settings: Any, engine: AsyncEngine, tmp_path: Path
 ) -> AsyncIterator[tuple[AsyncClient, Orchestrator]]:
     """Phase 2 loop with a human in the approval seat (no policy agent).
 
     Runs park in AWAITING_APPROVAL so tests can approve or reject plans
-    over HTTP and assert the approved_by audit trail.
+    over HTTP and assert the approved_by audit trail. The client is
+    logged in (fake OAuth); create a project via ``ensure_project``
+    before POSTing runs. Takes ``engine`` (unused) to force
+    truncation-before-login ordering (see ``authed_client``).
     """
     from app.config import get_settings
 
+    _ = engine
     get_settings.cache_clear()
 
+    from app.api.v1.auth import get_oauth_client
+    from app.auth.github import FakeGitHubOAuthClient
     from app.db import session as db_session
     from app.main import create_app
     from app.orchestrator import Orchestrator, StateAgentRegistry
 
-    db_session.init_engine(app_settings)
-    app = create_app(app_settings)
+    db_session.init_engine(auth_settings)
+    app = create_app(auth_settings)
+    app.dependency_overrides[get_oauth_client] = lambda: FakeGitHubOAuthClient()
     factory = db_session.get_session_factory()
     registry = StateAgentRegistry()
     _wire_test_agents(registry, factory, tmp_path / "workspaces")
@@ -684,6 +773,8 @@ async def manual_approval_app(
     try:
         transport = ASGITransport(app=app)
         async with AsyncClient(transport=transport, base_url="http://testserver") as ac:
+            login = await ac.get("/api/v1/auth/github/callback?code=any")
+            assert login.status_code == 200, login.text
             yield ac, orchestrator
     finally:
         await orchestrator.shutdown()

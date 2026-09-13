@@ -41,19 +41,24 @@ async def test_create_user_duplicate_email_returns_409(
     assert second.json()["error"]["code"] == "CONFLICT"
 
 
-async def test_get_user_returns_200(client: AsyncClient) -> None:
-    created = (await client.post("/api/v1/users", json={"email": "x@y.com"})).json()
-    response = await client.get(f"/api/v1/users/{created['id']}")
+async def test_get_user_returns_200(authed_client: AsyncClient) -> None:
+    me = (await authed_client.get("/api/v1/auth/me")).json()
+    response = await authed_client.get(f"/api/v1/users/{me['id']}")
     assert response.status_code == 200
-    assert response.json()["email"] == "x@y.com"
+    assert response.json()["email"] == me["email"]
 
 
-async def test_get_user_404_for_unknown_id(client: AsyncClient) -> None:
-    response = await client.get(f"/api/v1/users/{uuid.uuid4()}")
+async def test_get_user_404_for_unknown_id(authed_client: AsyncClient) -> None:
+    response = await authed_client.get(f"/api/v1/users/{uuid.uuid4()}")
     assert response.status_code == 404
     assert response.json()["error"]["code"] == "RESOURCE_NOT_FOUND"
 
 
-async def test_get_user_422_for_malformed_uuid(client: AsyncClient) -> None:
-    response = await client.get("/api/v1/users/not-a-uuid")
+async def test_get_user_422_for_malformed_uuid(authed_client: AsyncClient) -> None:
+    response = await authed_client.get("/api/v1/users/not-a-uuid")
     assert response.status_code == 422
+
+
+async def test_get_user_requires_auth(client: AsyncClient) -> None:
+    response = await client.get(f"/api/v1/users/{uuid.uuid4()}")
+    assert response.status_code == 401
