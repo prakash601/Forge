@@ -90,11 +90,13 @@ describe("subscribeToRun EventSource path", () => {
   class FakeEventSource {
     static instances: FakeEventSource[] = [];
     url: string;
+    init: object | undefined;
     listeners = new Map<string, Array<(event: object) => void>>();
     onerror: (() => void) | null = null;
     closed = false;
-    constructor(url: string) {
+    constructor(url: string, init?: object) {
       this.url = url;
+      this.init = init;
       FakeEventSource.instances.push(this);
     }
     addEventListener(type: string, listener: (event: object) => void) {
@@ -139,6 +141,7 @@ describe("subscribeToRun EventSource path", () => {
     });
     const source = FakeEventSource.instances[0];
     expect(source.url).toBe("http://api/api/v1/runs/run-9/stream");
+    expect(source.init).toEqual({ withCredentials: true });
     source.emit("snapshot", runFixture({ state: "CREATED" }));
     source.emit("state_changed", { state: "ANALYZING", version: 1 });
     source.emit("step_added", {

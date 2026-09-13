@@ -58,10 +58,34 @@ export interface Run {
   state: RunState;
   is_terminal: boolean;
   task: string;
+  project_id?: string | null;
+  branch?: string | null;
+  base_commit?: string | null;
   version: number;
   created_at: string;
   updated_at: string;
   steps: RunStep[];
+}
+
+export interface Project {
+  id: string;
+  owner_id: string;
+  name: string;
+  description: string | null;
+  status: string;
+  repo_url: string | null;
+  default_branch: string;
+  auto_approve_policy: boolean;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface User {
+  id: string;
+  email: string;
+  display_name: string | null;
+  created_at: string;
+  updated_at: string;
 }
 
 export interface RunListResponse {
@@ -81,26 +105,45 @@ export interface RunDetails {
   review: JsonRecord | null;
   memory_candidates: JsonRecord[];
   approved_by: string | null;
+  pull_request?: JsonRecord | null;
+}
+
+export interface ApiClientOptions {
+  /** Forwarded session cookie (server components). Browser calls use the jar. */
+  cookie?: string;
 }
 
 export interface ApiClient {
   baseUrl: string;
   getHealth(): Promise<HealthResponse>;
   getReady(): Promise<ReadyResponse>;
+  getMe(): Promise<User>;
+  logout(): Promise<void>;
+  loginUrl(next: string): string;
+  listProjects(): Promise<Project[]>;
+  createProject(name: string): Promise<Project>;
   listRuns(limit?: number, offset?: number): Promise<RunListResponse>;
   getRun(runId: string): Promise<Run>;
   getRunDetails(runId: string): Promise<RunDetails>;
   applyEvent(runId: string, event: "plan_approved" | "plan_rejected"): Promise<Run>;
-  createRun(task: string): Promise<Run>;
+  createRun(task: string, projectId: string): Promise<Run>;
 }
 
-export function createApiClient(baseUrl: string): ApiClient {
+export function createApiClient(baseUrl: string, options: ApiClientOptions = {}): ApiClient {
   const trimmed = baseUrl.replace(/\/+$/, "");
+  // Server components forward the session explicitly; browser calls
+  // ride the cookie jar (session is httpOnly, never in JS state).
+  const extraHeaders: Record<string, string> = {};
+  if (options.cookie !== undefined) {
+    extraHeaders.Cookie = options.cookie;
+  }
+  const credentials: RequestCredentials = options.cookie === undefined ? "include" : "omit";
 
   async function get<T>(path: string): Promise<T> {
     const response = await fetch(`${trimmed}${path}`, {
       method: "GET",
-      headers: { Accept: "application/json" },
+      headers: { Accept: "application/json", ...extraHeaders },
+      credentials,
       cache: "no-store",
     });
 
@@ -117,7 +160,8 @@ export function createApiClient(baseUrl: string): ApiClient {
   async function post<T>(path: string, body: unknown): Promise<T> {
     const response = await fetch(`${trimmed}${path}`, {
       method: "POST",
-      headers: { Accept: "application/json", "Content-Type": "application/json" },
+      headers: { Accept: "application/json", "Content-Type": "application/json", ...extraHeaders },
+      credentials,
       body: JSON.stringify(body),
     });
 
@@ -138,6 +182,12 @@ export function createApiClient(baseUrl: string): ApiClient {
     baseUrl: trimmed,
     getHealth: () => get<HealthResponse>("/health"),
     getReady: () => get<ReadyResponse>("/ready"),
+    getMe: () => get<User>("/api/v1/auth/me"),
+    logout: () => post<{ ok: boolean }>("/api/v1/auth/logout", {}).then(() => {}),
+    loginUrl: (next: string) =>
+      `${trimmed}/api/v1/auth/github/login?next=${encodeURIComponent(next)}`,
+    listProjects: () => get<Project[]>("/api/v1/projects?limit=200"),
+    createProject: (name: string) => post<Project>("/api/v1/projects", { name }),
     listRuns: (limit = 20, offset = 0) =>
       get<RunListResponse>(
         `/api/v1/runs?limit=${encodeURIComponent(String(limit))}&offset=${encodeURIComponent(String(offset))}`,
@@ -147,6 +197,7 @@ export function createApiClient(baseUrl: string): ApiClient {
       get<RunDetails>(`/api/v1/runs/${encodeURIComponent(runId)}/details`),
     applyEvent: (runId: string, event: "plan_approved" | "plan_rejected") =>
       post<Run>(`/api/v1/runs/${encodeURIComponent(runId)}/events`, { event }),
-    createRun: (task: string) => post<Run>("/api/v1/runs", { task }),
+    createRun: (task: string, projectId: string) =>
+      post<Run>("/api/v1/runs", { task, project_id: projectId }),
   };
 }

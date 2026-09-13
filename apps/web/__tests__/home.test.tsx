@@ -8,6 +8,10 @@ vi.mock("next/navigation", () => ({
   useRouter: () => ({ push: vi.fn() }),
 }));
 
+vi.mock("next/headers", () => ({
+  cookies: async () => ({ get: (_name: string) => undefined }),
+}));
+
 async function renderResolved(
   element: ReactElement | Promise<ReactElement>,
 ) {
@@ -59,6 +63,8 @@ describe("createApiClient", () => {
 
 describe("Home page (rendered via async server-component helper)", () => {
   const originalFetch = global.fetch;
+  const ME = { id: "user-1", email: "dev@example.com" };
+  const PROJECTS: unknown[] = [];
 
   beforeEach(() => {
     global.fetch = vi.fn(async (input: RequestInfo | URL) => {
@@ -67,6 +73,12 @@ describe("Home page (rendered via async server-component helper)", () => {
         return new Response(JSON.stringify({ status: "ok", version: "0.1.0" }), {
           status: 200,
         });
+      }
+      if (url.endsWith("/api/v1/auth/me")) {
+        return new Response(JSON.stringify(ME), { status: 200 });
+      }
+      if (url.includes("/api/v1/projects")) {
+        return new Response(JSON.stringify(PROJECTS), { status: 200 });
       }
       if (url.includes("/api/v1/runs")) {
         return new Response(
@@ -130,6 +142,12 @@ describe("Home page (rendered via async server-component helper)", () => {
       if (url.endsWith("/ready")) {
         return new Response(JSON.stringify({ status: "ok" }), { status: 200 });
       }
+      if (url.endsWith("/api/v1/auth/me")) {
+        return new Response(JSON.stringify(ME), { status: 200 });
+      }
+      if (url.includes("/api/v1/projects")) {
+        return new Response(JSON.stringify([]), { status: 200 });
+      }
       return new Response("boom", { status: 500 });
     });
     const { default: Home } = await import("@/app/page");
@@ -138,5 +156,25 @@ describe("Home page (rendered via async server-component helper)", () => {
     await waitFor(() => {
       expect(screen.getByText("Could not load runs from the API.")).toBeInTheDocument();
     });
+  });
+
+  it("shows the login prompt when logged out", async () => {
+    global.fetch = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.endsWith("/ready")) {
+        return new Response(JSON.stringify({ status: "ok" }), { status: 200 });
+      }
+      return new Response("gone", { status: 401 });
+    });
+    const { default: Home } = await import("@/app/page");
+    await renderResolved(Home({ searchParams: {} }));
+
+    await waitFor(() => {
+      expect(screen.getByRole("heading", { name: "Log in" })).toBeInTheDocument();
+    });
+    expect(screen.getByRole("link", { name: "Log in with GitHub" })).toHaveAttribute(
+      "href",
+      expect.stringContaining("/api/v1/auth/github/login?next="),
+    );
   });
 });

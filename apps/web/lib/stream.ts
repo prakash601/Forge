@@ -20,7 +20,10 @@ export interface SubscribeOptions {
   pollIntervalMs?: number;
 }
 
-type EventSourceFactory = new (url: string) => EventSource;
+type EventSourceFactory = new (
+  url: string,
+  init?: { withCredentials?: boolean },
+) => EventSource;
 
 function getEventSourceFactory(): EventSourceFactory | null {
   if (typeof EventSource === "undefined") {
@@ -51,8 +54,10 @@ function startEventStream(
   pollIntervalMs: number,
 ): () => void {
   let settled = false;
+  // withCredentials carries the session cookie cross-origin (Issue #022).
   const source = new factory(
     `${baseUrl}/api/v1/runs/${encodeURIComponent(runId)}/stream`,
+    { withCredentials: true },
   );
 
   const markSettled = () => {

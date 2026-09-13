@@ -72,7 +72,10 @@ async def test_callback_creates_session(auth_stack: Any) -> None:
     body = response.json()
     assert body["email"] == "octocat@example.com"
     assert "github_token_encrypted" not in body
-    assert "forge_session=" in response.headers.get("set-cookie", "")
+    set_cookie = response.headers.get("set-cookie", "")
+    assert "forge_session=" in set_cookie
+    assert "httponly" in set_cookie.lower()
+    assert "samesite=lax" in set_cookie.lower()
 
 
 async def test_callback_rejects_bad_code(auth_stack: Any) -> None:
@@ -103,6 +106,39 @@ async def test_callback_relogin_is_idempotent(auth_stack: Any) -> None:
     first = (await client.get("/api/v1/auth/github/callback?code=any")).json()
     second = (await client.get("/api/v1/auth/github/callback?code=any")).json()
     assert first["id"] == second["id"]
+
+
+async def test_callback_redirects_to_dashboard_with_valid_next(
+    auth_stack: Any,
+) -> None:
+    client, _, _ = auth_stack
+    response = await client.get(
+        "/api/v1/auth/github/callback?code=any&state=http://localhost:3000/",
+        follow_redirects=False,
+    )
+    assert response.status_code == 307
+    assert response.headers["location"] == "http://localhost:3000/"
+    assert "forge_session=" in response.headers.get("set-cookie", "")
+
+
+async def test_callback_rejects_foreign_next(auth_stack: Any) -> None:
+    client, _, _ = auth_stack
+    response = await client.get(
+        "/api/v1/auth/github/callback?code=any&state=https://evil.example/phish",
+        follow_redirects=False,
+    )
+    assert response.status_code == 200  # falls back to JSON, no redirect
+    assert response.json()["email"] == "octocat@example.com"
+
+
+async def test_login_carries_next_in_state(auth_stack: Any) -> None:
+    client, _, _ = auth_stack
+    response = await client.get(
+        "/api/v1/auth/github/login?next=http://localhost:3000/",
+        follow_redirects=False,
+    )
+    assert response.status_code == 307
+    assert "state=http" in response.headers["location"]
 
 
 async def test_me_with_cookie(auth_stack: Any) -> None:

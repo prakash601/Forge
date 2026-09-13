@@ -179,11 +179,15 @@ export interface RunLiveProps {
 
 export function RunLive({ apiBaseUrl, runId, initial, pollIntervalMs }: RunLiveProps) {
   const [details, setDetails] = useState<RunDetails>(initial);
+  const [streamError, setStreamError] = useState<string | null>(null);
 
   const refresh = useCallback(() => {
     createApiClient(apiBaseUrl)
       .getRunDetails(runId)
-      .then(setDetails)
+      .then((next) => {
+        setDetails(next);
+        setStreamError(null);
+      })
       .catch(() => {
         // A failed refetch leaves the last known state on screen.
       });
@@ -201,20 +205,31 @@ export function RunLive({ apiBaseUrl, runId, initial, pollIntervalMs }: RunLiveP
           run: { ...prev.run, steps: [...prev.run.steps, step] },
         }));
       },
+      onError: (message) => {
+        setStreamError(message);
+      },
     }, options);
   }, [apiBaseUrl, runId, pollIntervalMs, refresh]);
 
   return (
-    <RunDetail
-      details={details}
-      approval={
-        <PlanApproval
-          apiBaseUrl={apiBaseUrl}
-          runId={runId}
-          state={details.run.state}
-          onChanged={refresh}
-        />
-      }
-    />
+    <>
+      {streamError ? (
+        <p role="alert" className="error">
+          Live updates interrupted: {streamError}. If your session expired,{" "}
+          <a href={createApiClient(apiBaseUrl).loginUrl("/")}>log in again</a>.
+        </p>
+      ) : null}
+      <RunDetail
+        details={details}
+        approval={
+          <PlanApproval
+            apiBaseUrl={apiBaseUrl}
+            runId={runId}
+            state={details.run.state}
+            onChanged={refresh}
+          />
+        }
+      />
+    </>
   );
 }
