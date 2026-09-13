@@ -24,7 +24,13 @@ from app.github.errors import InvalidRepoConfigError, InvalidRepoURLError
 from app.github.service import connect_repo
 from app.projects import service
 from app.projects.errors import ProjectNotFoundError
-from app.projects.schemas import ProjectCreate, ProjectRead, RepoConnectRequest, RepoRead
+from app.projects.schemas import (
+    ProjectCreate,
+    ProjectPatch,
+    ProjectRead,
+    RepoConnectRequest,
+    RepoRead,
+)
 from app.users.models import User
 
 router = APIRouter(prefix="/projects", tags=["projects"])
@@ -48,6 +54,7 @@ async def create_project_endpoint(
         owner_id=current_user.id,
         name=payload.name,
         description=payload.description,
+        auto_approve_policy=payload.auto_approve_policy,
     )
     await session.commit()
     log.info(
@@ -84,6 +91,67 @@ async def read_project_endpoint(
                 "request_id": request.state.request_id,
             },
         ) from exc
+    return ProjectRead.model_validate(project)
+
+
+@router.patch(
+    "/{project_id}",
+    response_model=ProjectRead,
+    status_code=status.HTTP_200_OK,
+    summary="Update an owned project (owner only).",
+    responses={404: {"description": "Project does not exist or is not yours."}},
+)
+async def update_project_endpoint(
+    request: Request,
+    payload: ProjectPatch,
+    session: Annotated[AsyncSession, Depends(get_session)],
+    current_user: Annotated[User, Depends(get_current_user)],
+    project_id: Annotated[uuid.UUID, Path(description="Project identifier (UUID).")],
+) -> ProjectRead:
+    if payload.name is None and payload.description is None and payload.auto_approve_policy is None:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail={
+                "code": "VALIDATION_ERROR",
+                "message": "Nothing to update.",
+                "request_id": request.state.request_id,
+            },
+        )
+    try:
+        project = await service.update_project(
+            session,
+            project_id=project_id,
+            owner_id=current_user.id,
+            name=payload.name,
+            description=payload.description,
+            auto_approve_policy=payload.auto_approve_policy,
+        )
+    except ProjectNotFoundError as exc:
+        await session.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail={
+                "code": "RESOURCE_NOT_FOUND",
+                "message": str(exc),
+                "request_id": request.state.request_id,
+            },
+        ) from exc
+    except ValueError as exc:
+        await session.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail={
+                "code": "VALIDATION_ERROR",
+                "message": str(exc),
+                "request_id": request.state.request_id,
+            },
+        ) from exc
+    await session.commit()
+    log.info(
+        "project_updated",
+        project_id=str(project.id),
+        request_id=request.state.request_id,
+    )
     return ProjectRead.model_validate(project)
 
 

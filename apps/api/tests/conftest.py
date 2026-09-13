@@ -190,11 +190,17 @@ def _stop_containers_at_end() -> AsyncIterator[None]:
 
 
 @pytest.fixture
-def app_settings(postgres_engine_url: str) -> Any:
+def app_settings(postgres_engine_url: str, monkeypatch: pytest.MonkeyPatch) -> Any:
     """Settings pointing at the test database."""
     from app.config import Settings
 
-    return Settings(database_url=postgres_engine_url, environment="test", log_level="WARNING")
+    # Test env keeps policy auto-approval via env config (decision #61
+    # Q2-a); production defaults to the human gate. Env-only (no kwarg)
+    # so the wiring itself is exercised.
+    monkeypatch.setenv("FORGE_AUTO_APPROVE", "true")
+    settings = Settings(database_url=postgres_engine_url, environment="test", log_level="WARNING")
+    assert settings.auto_approve is True
+    return settings
 
 
 @pytest_asyncio.fixture
@@ -269,18 +275,20 @@ async def client(app_instance: Any) -> AsyncIterator[AsyncClient]:
 
 
 @pytest_asyncio.fixture
-async def auth_settings(postgres_engine_url: str) -> Any:
+async def auth_settings(postgres_engine_url: str, monkeypatch: pytest.MonkeyPatch) -> Any:
     """Settings with auth configured (GitHub OAuth test creds + JWT).
 
     Uses the fake OAuth client via dependency override in the fixtures
     below — no network, ever. The plain ``app_settings`` fixture stays
-    unconfigured so 503-path tests keep working.
+    unconfigured so 503-path tests keep working. Auto-approve comes
+    from env config (decision #61 Q2-a), like ``app_settings``.
     """
     from cryptography.fernet import Fernet
 
     from app.config import Settings
 
-    return Settings(
+    monkeypatch.setenv("FORGE_AUTO_APPROVE", "true")
+    settings = Settings(
         database_url=postgres_engine_url,
         environment="test",
         log_level="WARNING",
@@ -289,6 +297,8 @@ async def auth_settings(postgres_engine_url: str) -> Any:
         jwt_secret="test-jwt-secret-for-suite-use-only",
         credentials_key=Fernet.generate_key().decode(),
     )
+    assert settings.auto_approve is True
+    return settings
 
 
 @pytest_asyncio.fixture

@@ -62,7 +62,6 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         from app.agents.debugger import DebuggerAgent
         from app.agents.developer import DeveloperAgent
         from app.agents.planner import PlannerAgent
-        from app.agents.policy import PolicyAutoApproveAgent
         from app.agents.reviewer import ReviewerAgent
         from app.agents.service import (
             get_analysis,
@@ -423,13 +422,19 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         registry.register(RunState.COMPLETED, _publisher)
         app.state.publisher = _publisher
 
-        if settings.auto_approve:
-            registry.register(RunState.AWAITING_APPROVAL, PolicyAutoApproveAgent())
-        else:
-            # Neutralize the stub mapping: a waiting run must not approve itself.
-            from app.orchestrator import null_agent
+        # Plan approval gate (Phase 4, Issue #020): policy approval only
+        # under the global env or the run's project opt-in; otherwise the
+        # run waits for a human. Replaces the auto_approve if/else: the
+        # decision is per-run now, not per-deploy.
+        from app.agents.policy import ProjectPolicyAgent
 
-            registry.register(RunState.AWAITING_APPROVAL, null_agent)
+        registry.register(
+            RunState.AWAITING_APPROVAL,
+            ProjectPolicyAgent(
+                session_factory=factory,
+                global_auto_approve=settings.auto_approve,
+            ),
+        )
     except Exception as exc:
         log.warning("agents_wire_failed", error=str(exc))
     orchestrator = Orchestrator(

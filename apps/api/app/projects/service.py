@@ -36,6 +36,7 @@ async def create_project(
     owner_id: uuid.UUID,
     name: str,
     description: str | None = None,
+    auto_approve_policy: bool = False,
 ) -> Project:
     """Create a new project owned by ``owner_id``.
 
@@ -59,6 +60,7 @@ async def create_project(
         name=name.strip(),
         description=(description.strip() if description else None) or None,
         status=ProjectStatus.ACTIVE,
+        auto_approve_policy=auto_approve_policy,
         created_at=now,
         updated_at=now,
     )
@@ -102,6 +104,35 @@ async def list_owned_project_ids(session: AsyncSession, owner_id: uuid.UUID) -> 
     return list(result.scalars().all())
 
 
+async def update_project(
+    session: AsyncSession,
+    *,
+    project_id: uuid.UUID,
+    owner_id: uuid.UUID,
+    name: str | None = None,
+    description: str | None = None,
+    auto_approve_policy: bool | None = None,
+) -> Project:
+    """Update owned project fields (``None`` = leave unchanged).
+
+    Description clearing is not supported (pass a new value or leave
+    it). Raises :class:`ProjectNotFoundError` for missing or foreign
+    projects and :class:`ValueError` for empty names.
+    """
+    project = await get_owned_project(session, project_id, owner_id)
+    if name is not None:
+        if not name.strip():
+            raise ValueError("name must be a non-empty string")
+        project.name = name.strip()
+    if description is not None:
+        project.description = description.strip() or None
+    if auto_approve_policy is not None:
+        project.auto_approve_policy = auto_approve_policy
+    project.updated_at = datetime.now(UTC)
+    await session.flush()
+    return project
+
+
 async def list_projects_for_owner(
     session: AsyncSession,
     owner_id: uuid.UUID,
@@ -141,4 +172,5 @@ __all__ = [
     "get_project",
     "list_owned_project_ids",
     "list_projects_for_owner",
+    "update_project",
 ]

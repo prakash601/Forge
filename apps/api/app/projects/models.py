@@ -9,7 +9,7 @@ from __future__ import annotations
 import uuid
 from datetime import datetime
 
-from sqlalchemy import DateTime, ForeignKey, String, Text, text
+from sqlalchemy import Boolean, DateTime, ForeignKey, String, Text, text
 from sqlalchemy.dialects.postgresql import UUID as PG_UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -42,6 +42,12 @@ class Project(Base):
         String(255), nullable=False, default="main", server_default="main"
     )
     github_credential_ref: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # Policy-approval opt-in (Phase 4, Issue #020; migration 0013).
+    # FALSE means plans wait for a human; TRUE restores machine policy
+    # approval for this project's runs.
+    auto_approve_policy: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default=text("false")
+    )
     status: Mapped[ProjectStatus] = mapped_column(
         String(50),
         nullable=False,
