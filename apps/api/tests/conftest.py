@@ -198,7 +198,26 @@ def app_settings(postgres_engine_url: str, monkeypatch: pytest.MonkeyPatch) -> A
     # Q2-a); production defaults to the human gate. Env-only (no kwarg)
     # so the wiring itself is exercised.
     monkeypatch.setenv("FORGE_AUTO_APPROVE", "true")
-    settings = Settings(database_url=postgres_engine_url, environment="test", log_level="WARNING")
+    # Explicitly unconfigured: .env on a dev machine carries local
+    # FORGE_JWT_SECRET / credentials, but 503-path tests need the
+    # no-auth-config state. Explicit kwargs beat env file values.
+    for var in (
+        "FORGE_JWT_SECRET",
+        "JWT_SECRET",
+        "FORGE_CREDENTIALS_KEY",
+        "GITHUB_CLIENT_ID",
+        "GITHUB_CLIENT_SECRET",
+    ):
+        monkeypatch.delenv(var, raising=False)
+    settings = Settings(
+        database_url=postgres_engine_url,
+        environment="test",
+        log_level="WARNING",
+        github_client_id=None,
+        github_client_secret=None,
+        jwt_secret=None,
+        credentials_key=None,
+    )
     assert settings.auto_approve is True
     return settings
 

@@ -75,13 +75,27 @@ class Settings(BaseSettings):
     embedding_provider: str = Field(
         default="fake",
         validation_alias=AliasChoices("embedding_provider", "FORGE_EMBEDDING_PROVIDER"),
-        description="Embedding provider name: 'fake' (CI/tests) or 'openai'.",
+        description=(
+            "Embedding provider name: 'fake' (CI/tests), 'openai' "
+            "(text-embedding-3-small), or 'gemini' (Gemini embedContent, "
+            "free tier via Google AI Studio)."
+        ),
     )
     openai_api_key: str | None = Field(
         default=None,
-        validation_alias=AliasChoices("openai_api_key", "OPENAI_API_KEY", "FORGE_OPENAI_API_KEY"),
+        validation_alias=AliasChoices(
+            "openai_api_key",
+            "OPENAI_API_KEY",
+            "FORGE_OPENAI_API_KEY",
+            "FORGE_LLM_API_KEY",
+            "GEMINI_API_KEY",
+            "FORGE_GEMINI_API_KEY",
+            "FORGE_EMBEDDING_API_KEY",
+        ),
         description=(
-            "OpenAI API key. Required only when embedding_provider=openai or llm_provider=openai."
+            "API key for the LLM gateway. Required when llm_provider is "
+            "'openai' or 'opencode' (an OpenCode service-account key works "
+            "for the latter)."
         ),
     )
     embedding_model: str = Field(
@@ -108,7 +122,21 @@ class Settings(BaseSettings):
     llm_provider: str = Field(
         default="fake",
         validation_alias=AliasChoices("llm_provider", "FORGE_LLM_PROVIDER"),
-        description="LLM provider name: 'fake' (CI/tests) or 'openai'.",
+        description=(
+            "LLM provider name: 'fake' (CI/tests), 'openai' "
+            "(api.openai.com), or 'opencode' (OpenCode inference, "
+            "OpenAI-compatible). Any of the latter two honor llm_base_url."
+        ),
+    )
+    llm_base_url: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices("llm_base_url", "FORGE_LLM_BASE_URL"),
+        description=(
+            "Override root for an OpenAI-compatible chat-completions "
+            "gateway ('/chat/completions' is appended). Defaults to "
+            "api.openai.com for 'openai' and "
+            "opencode.ai/inference/openai/v1 for 'opencode'."
+        ),
     )
     llm_model: str = Field(
         default="gpt-4o-mini",

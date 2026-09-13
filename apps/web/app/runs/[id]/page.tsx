@@ -3,6 +3,7 @@ import { notFound } from "next/navigation";
 
 import { ApiError, createApiClient } from "@/lib/api";
 import { sessionCookie } from "@/lib/session";
+import { publicApiBaseUrl, serverApiBaseUrl } from "@/lib/urls";
 import { LoginPrompt } from "@/components/LoginButton";
 import { RunLive } from "@/components/RunLive";
 
@@ -13,10 +14,8 @@ interface RunPageProps {
 
 export default async function RunPage({ params, searchParams }: RunPageProps) {
   const { id } = await params;
-  const baseUrl =
-    typeof searchParams.api === "string" && searchParams.api
-      ? searchParams.api
-      : (process.env.API_BASE_URL ?? "http://localhost:8000");
+  const baseUrl = serverApiBaseUrl(searchParams);
+  const browserBaseUrl = publicApiBaseUrl(baseUrl);
   const cookie = await sessionCookie();
   const client = createApiClient(baseUrl, { cookie });
 
@@ -33,7 +32,7 @@ export default async function RunPage({ params, searchParams }: RunPageProps) {
           <nav className="crumbs">
             <Link href="/">Runs</Link>
           </nav>
-          <LoginPrompt apiBaseUrl={baseUrl} />
+          <LoginPrompt apiBaseUrl={browserBaseUrl} />
         </main>
       );
     }
@@ -48,7 +47,7 @@ export default async function RunPage({ params, searchParams }: RunPageProps) {
         <span className="mono">{id.slice(0, 8)}</span>
       </nav>
       <h1 className="detail-title">Run</h1>
-      <RunLive apiBaseUrl={baseUrl} runId={id} initial={details} />
+      <RunLive apiBaseUrl={browserBaseUrl} runId={id} initial={details} />
     </main>
   );
 }

@@ -16,7 +16,9 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 
 RUN pip install --no-cache-dir uv==0.4.18 \
     && groupadd --system --gid 1000 forge \
-    && useradd --system --uid 1000 --gid forge --home /app forge
+    && useradd --system --uid 1000 --gid forge --home /app forge \
+    && mkdir -p /app/.cache/uv \
+    && chown -R forge:forge /app
 
 WORKDIR /app
 

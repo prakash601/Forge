@@ -15,6 +15,7 @@ import secrets
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
+from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.auth.dependencies import cipher_or_503, get_current_user
@@ -26,10 +27,10 @@ from app.auth.errors import (
 from app.auth.github import GitHubOAuthClient, RealGitHubOAuthClient
 from app.auth.schemas import AuthStatus
 from app.auth.service import handle_oauth_callback
-from app.auth.tokens import SESSION_COOKIE
+from app.auth.tokens import SESSION_COOKIE, create_session_token
 from app.core.logging import get_logger
 from app.db.session import get_session
-from app.users.errors import DuplicateUserEmailError, GitHubAccountLinkedError
+from app.users.errors import DuplicateUserEmailError, GitHubAccountLinkedError, UserNotFoundError
 from app.users.models import User
 from app.users.schemas import UserRead
 
@@ -158,6 +159,85 @@ async def github_callback(
         )
         _set_session_cookie(redirect, token=token, request=request)
         return redirect
+    body = UserRead.model_validate(user).model_dump_json().encode("utf-8")
+    response = Response(content=body, media_type="application/json")
+    _set_session_cookie(response, token=token, request=request)
+    return response
+
+
+class DevLoginRequest(BaseModel):
+    """Local-only login (no OAuth). Disabled in production."""
+
+    email: str = Field(min_length=3, max_length=320, description="Local dev email.")
+    display_name: str | None = Field(default=None, max_length=255)
+
+
+@router.post(
+    "/dev-login",
+    response_model=UserRead,
+    status_code=status.HTTP_200_OK,
+    summary="Local dev login (no GitHub OAuth). 403 in production.",
+)
+async def dev_login(
+    request: Request,
+    payload: DevLoginRequest,
+    session: Annotated[AsyncSession, Depends(get_session)],
+) -> Response:
+    """Mint a session cookie for a local email address.
+
+    Local-only convenience so the dashboard is usable on a laptop
+    without GitHub OAuth credentials, a domain, or TLS. Disabled
+    in production (403 ``DEV_LOGIN_DISABLED``) and requires
+    ``jwt_secret`` like the OAuth callback.
+    """
+    from app.users import service as users_service
+
+    settings = request.app.state.settings
+    if settings.is_production:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail={
+                "code": "DEV_LOGIN_DISABLED",
+                "message": "Dev login is disabled in production.",
+                "request_id": request.state.request_id,
+            },
+        )
+    if not settings.jwt_secret:
+        raise _not_configured(request, "jwt_secret")
+    email = payload.email.strip().lower()
+    if "@" not in email:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail={
+                "code": "VALIDATION_ERROR",
+                "message": "Enter a valid email address.",
+                "request_id": request.state.request_id,
+            },
+        )
+    try:
+        try:
+            user = await users_service.get_user_by_email(session, email)
+        except UserNotFoundError:
+            user = await users_service.create_user(
+                session, email=email, display_name=payload.display_name
+            )
+    except DuplicateUserEmailError as exc:
+        await session.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={
+                "code": "CONFLICT",
+                "message": str(exc),
+                "request_id": request.state.request_id,
+            },
+        ) from exc
+    await session.commit()
+    token = create_session_token(
+        user_id=user.id,
+        secret=settings.jwt_secret,
+        expires_in_seconds=settings.jwt_expiry_seconds,
+    )
+    log.info("dev_user_logged_in", user_id=str(user.id), request_id=request.state.request_id)
     body = UserRead.model_validate(user).model_dump_json().encode("utf-8")
     response = Response(content=body, media_type="application/json")
     _set_session_cookie(response, token=token, request=request)

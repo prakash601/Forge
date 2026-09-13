@@ -2,6 +2,7 @@ import Link from "next/link";
 
 import { createApiClient } from "@/lib/api";
 import { sessionCookie } from "@/lib/session";
+import { publicApiBaseUrl, serverApiBaseUrl } from "@/lib/urls";
 import { LoginPrompt } from "@/components/LoginButton";
 import { LogoutButton } from "@/components/LogoutButton";
 import { NewRunForm } from "@/components/NewRunForm";
@@ -12,13 +13,14 @@ interface HomePageProps {
 }
 
 function apiBaseUrl(searchParams: HomePageProps["searchParams"]): string {
-  return typeof searchParams.api === "string" && searchParams.api
-    ? searchParams.api
-    : (process.env.API_BASE_URL ?? "http://localhost:8000");
+  return serverApiBaseUrl(searchParams);
 }
 
 export default async function Home({ searchParams }: HomePageProps) {
   const baseUrl = apiBaseUrl(searchParams);
+  // Browser-facing fetches (forms, SSE, login) must use the public URL:
+  // inside Docker `API_BASE_URL=http://api:8000` is unreachable from the laptop.
+  const browserBaseUrl = publicApiBaseUrl(baseUrl);
   const cookie = await sessionCookie();
   const client = createApiClient(baseUrl, { cookie });
 
@@ -55,7 +57,7 @@ export default async function Home({ searchParams }: HomePageProps) {
               : `Cannot reach API at ${baseUrl}`}
           </span>
         </div>
-        <LoginPrompt apiBaseUrl={baseUrl} />
+        <LoginPrompt apiBaseUrl={browserBaseUrl} />
       </main>
     );
   }
@@ -79,12 +81,12 @@ export default async function Home({ searchParams }: HomePageProps) {
             ? `Connected to API (v${ready?.version ?? "?"})`
             : `Cannot reach API at ${baseUrl}`}
         </span>{" "}
-        <LogoutButton apiBaseUrl={baseUrl} email={me.email} />
+        <LogoutButton apiBaseUrl={browserBaseUrl} email={me.email} />
       </div>
 
       <section className="panel">
         <h2>New run</h2>
-        <NewRunForm apiBaseUrl={baseUrl} projects={projects ?? []} />
+        <NewRunForm apiBaseUrl={browserBaseUrl} projects={projects ?? []} />
       </section>
 
       <section className="panel runs">

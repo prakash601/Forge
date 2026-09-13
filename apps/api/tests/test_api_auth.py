@@ -189,3 +189,53 @@ async def test_logout_clears_cookie(auth_stack: Any) -> None:
     assert response.json() == {"ok": True}
     assert "forge_session=" in response.headers.get("set-cookie", "")
     assert (await client.get("/api/v1/auth/me")).status_code == 401
+
+
+async def test_dev_login_creates_user_and_session(auth_stack: Any) -> None:
+    client, _, _ = auth_stack
+    response = await client.post("/api/v1/auth/dev-login", json={"email": "Dev@Local.Test"})
+    assert response.status_code == 200, response.text
+    assert response.json()["email"] == "dev@local.test"
+    assert "forge_session=" in response.headers.get("set-cookie", "")
+    me = await client.get("/api/v1/auth/me")
+    assert me.status_code == 200
+    assert me.json()["email"] == "dev@local.test"
+
+
+async def test_dev_login_is_idempotent(auth_stack: Any) -> None:
+    client, _, _ = auth_stack
+    first = (await client.post("/api/v1/auth/dev-login", json={"email": "same@local.test"})).json()
+    second = (await client.post("/api/v1/auth/dev-login", json={"email": "same@local.test"})).json()
+    assert first["id"] == second["id"]
+
+
+async def test_dev_login_rejects_bad_email(auth_stack: Any) -> None:
+    client, _, _ = auth_stack
+    response = await client.post("/api/v1/auth/dev-login", json={"email": "not-an-email"})
+    assert response.status_code == 422
+
+
+async def test_dev_login_403_in_production(postgres_engine_url: str) -> None:
+    from httpx import ASGITransport, AsyncClient
+
+    from app.config import Settings, get_settings
+    from app.db import session as db_session
+    from app.main import create_app
+
+    get_settings.cache_clear()
+    settings = Settings(
+        database_url=postgres_engine_url,
+        environment="production",
+        log_level="WARNING",
+        jwt_secret="prod-secret-for-test-only-1234567890",
+    )
+    db_session.init_engine(settings)
+    try:
+        app = create_app(settings)
+        transport = ASGITransport(app=app)
+        async with AsyncClient(transport=transport, base_url="http://testserver") as client:
+            response = await client.post("/api/v1/auth/dev-login", json={"email": "a@b.com"})
+        assert response.status_code == 403
+        assert response.json()["error"]["code"] == "DEV_LOGIN_DISABLED"
+    finally:
+        await db_session.dispose_engine()

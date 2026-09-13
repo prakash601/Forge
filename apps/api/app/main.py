@@ -83,6 +83,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             model=settings.llm_model,
             max_output_tokens=settings.llm_max_output_tokens,
             timeout_seconds=settings.llm_timeout_seconds,
+            base_url=settings.llm_base_url,
         )
 
         async def _save_analysis(
@@ -108,6 +109,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
         async def _load_memory(run_id: uuid.UUID | None = None) -> list[str]:
             from app.agents.service import get_latest_memory
+            from app.memory.service import search_similar_memories
             from app.runs.service import get_run
 
             session = factory()
@@ -123,14 +125,35 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
                     return []
                 if run.project_id is None:
                     return []
+                lines: list[str] = []
                 row = await get_latest_memory(session, project_id=run.project_id)
-                if row is None:
-                    return []
-                return [
-                    f"{c.get('memory_type', 'NOTE')}: {c.get('content', '')}"
-                    for c in row.candidates
-                    if isinstance(c, dict)
-                ]
+                if row is not None:
+                    lines.extend(
+                        f"{c.get('memory_type', 'NOTE')}: {c.get('content', '')}"
+                        for c in row.candidates
+                        if isinstance(c, dict)
+                    )
+                # Vector recall: nearest ACTIVE memories to the task
+                # text, so old but relevant learnings surface even when
+                # they are not the latest. Same per-project scoping;
+                # any failure degrades to latest-memory lines only.
+                try:
+                    provider = getattr(app.state, "embedding_provider", None)
+                    if provider is not None and run.task.strip():
+                        query = await provider.embed(run.task)
+                        similar = await search_similar_memories(
+                            session,
+                            project_id=run.project_id,
+                            query_embedding=query,
+                            limit=5,
+                        )
+                        for item in similar:
+                            line = f"{item.memory_type}: {item.content}"
+                            if line not in lines:
+                                lines.append(line)
+                except Exception:
+                    log.warning("memory_vector_recall_failed", run_id=str(run_id))
+                return lines
             except Exception:
                 return []
             finally:
@@ -450,6 +473,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         api_key=settings.openai_api_key,
         model=settings.embedding_model,
         timeout_seconds=settings.embedding_timeout_seconds,
+        dimension=settings.embedding_dimension,
     )
     log.info(
         "api_started",

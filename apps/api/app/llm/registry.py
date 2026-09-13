@@ -17,11 +17,15 @@ def get_llm_provider(
     max_output_tokens: int | None = None,
     timeout_seconds: float = 30.0,
     client: httpx.AsyncClient | None = None,
+    base_url: str | None = None,
 ) -> LLMProvider:
     """Return the LLM provider for ``provider_name``.
 
-    Only ``fake`` (CI/tests) and ``openai`` exist; Anthropic will sit
-    behind the same seam later.
+    ``fake`` (CI/tests), ``openai`` (api.openai.com), or ``opencode``
+    (OpenCode inference ``https://opencode.ai/inference/openai/v1``,
+    OpenAI-compatible chat completions). ``base_url`` overrides the
+    endpoint root for ``openai``/``opencode`` (``/chat/completions``
+    is appended), so any OpenAI-compatible gateway works.
 
     Raises:
         ValueError: unknown provider name.
@@ -36,6 +40,17 @@ def get_llm_provider(
             max_output_tokens=max_output_tokens,
             timeout_seconds=timeout_seconds,
             client=client,
+            base_url=base_url,
+        )
+    if normalized == "opencode":
+        return OpenAILLMProvider(
+            api_key=api_key,
+            model=model,
+            max_output_tokens=max_output_tokens,
+            timeout_seconds=timeout_seconds,
+            client=client,
+            base_url=base_url or OpenAILLMProvider.OPENCODE_BASE_URL,
+            name="opencode",
         )
     raise ValueError(f"unknown LLM provider: {provider_name!r}")
 

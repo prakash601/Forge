@@ -137,8 +137,45 @@ async def list_memory_items_for_project(
     return list(result.scalars().all())
 
 
+async def search_similar_memories(
+    session: AsyncSession,
+    *,
+    project_id: uuid.UUID,
+    query_embedding: list[float],
+    limit: int = 5,
+) -> list[MemoryItem]:
+    """Return up to ``limit`` ACTIVE memory items in ``project_id`` ranked by similarity.
+
+    Ranking is cosine distance over the pgvector column (nearest
+    first). Items without a vector (embedding not yet populated) are
+    skipped; a project with no embedded memories yields ``[]``.
+
+    Scoping follows the same rule as the rest of the memory seam
+    (#016): strictly per-project, fail closed. An unknown project
+    simply has no rows, so this returns ``[]`` rather than raising.
+    """
+    if not query_embedding:
+        raise ValueError("query_embedding must be a non-empty vector")
+    if limit < 1:
+        raise ValueError("limit must be >= 1")
+    stmt = (
+        select(MemoryItem)
+        .join(MemoryEmbedding, MemoryEmbedding.memory_item_id == MemoryItem.id)
+        .where(
+            MemoryItem.project_id == project_id,
+            MemoryItem.status == MemoryStatus.ACTIVE.value,
+            MemoryEmbedding.embedding.is_not(None),
+        )
+        .order_by(MemoryEmbedding.embedding.cosine_distance(query_embedding))
+        .limit(limit)
+    )
+    result = await session.execute(stmt)
+    return list(result.scalars().all())
+
+
 __all__ = [
     "create_memory_item",
     "get_memory_item",
     "list_memory_items_for_project",
+    "search_similar_memories",
 ]

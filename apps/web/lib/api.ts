@@ -118,6 +118,7 @@ export interface ApiClient {
   getHealth(): Promise<HealthResponse>;
   getReady(): Promise<ReadyResponse>;
   getMe(): Promise<User>;
+  devLogin(email: string, displayName?: string): Promise<User>;
   logout(): Promise<void>;
   loginUrl(next: string): string;
   listProjects(): Promise<Project[]>;
@@ -183,6 +184,8 @@ export function createApiClient(baseUrl: string, options: ApiClientOptions = {})
     getHealth: () => get<HealthResponse>("/health"),
     getReady: () => get<ReadyResponse>("/ready"),
     getMe: () => get<User>("/api/v1/auth/me"),
+    devLogin: (email: string, displayName?: string) =>
+      post<User>("/api/v1/auth/dev-login", { email, display_name: displayName ?? null }),
     logout: () => post<{ ok: boolean }>("/api/v1/auth/logout", {}).then(() => {}),
     loginUrl: (next: string) =>
       `${trimmed}/api/v1/auth/github/login?next=${encodeURIComponent(next)}`,
