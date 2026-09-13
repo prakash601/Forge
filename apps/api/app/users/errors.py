@@ -25,4 +25,15 @@ class DuplicateUserEmailError(ValueError):
         return f"A user with email {self.email!r} already exists."
 
 
-__all__ = ["DuplicateUserEmailError", "UserNotFoundError"]
+class GitHubAccountLinkedError(ValueError):
+    """A different user already linked this GitHub account."""
+
+    def __init__(self, github_id: int) -> None:
+        super().__init__(github_id)
+        self.github_id = github_id
+
+    def __str__(self) -> str:  # pragma: no cover - trivial
+        return f"GitHub account {self.github_id!r} is already linked to another user."
+
+
+__all__ = ["DuplicateUserEmailError", "GitHubAccountLinkedError", "UserNotFoundError"]

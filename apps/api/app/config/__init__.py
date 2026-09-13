@@ -156,6 +156,39 @@ class Settings(BaseSettings):
         description="Filesystem path to the reference fixture repo analyzed by the Archaeologist.",
     )
 
+    # ----- Auth (Phase 4, Issue #015, decided in #56) -----
+    github_client_id: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices("github_client_id", "GITHUB_CLIENT_ID"),
+        description="GitHub OAuth app client ID. Absent → /auth/* returns 503.",
+    )
+    github_client_secret: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices("github_client_secret", "GITHUB_CLIENT_SECRET"),
+        description="GitHub OAuth app client secret. Never logged or exposed.",
+    )
+    github_oauth_callback_url: str = Field(
+        default="http://localhost:8000/api/v1/auth/github/callback",
+        validation_alias=AliasChoices("github_oauth_callback_url", "FORGE_GITHUB_CALLBACK_URL"),
+        description="OAuth redirect URI registered on the GitHub app.",
+    )
+    jwt_secret: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices("jwt_secret", "FORGE_JWT_SECRET", "JWT_SECRET"),
+        description="HS256 secret for session JWTs. Required for login sessions.",
+    )
+    credentials_key: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices("credentials_key", "FORGE_CREDENTIALS_KEY"),
+        description="Fernet key (urlsafe base64) for GitHub tokens at rest.",
+    )
+    jwt_expiry_seconds: int = Field(
+        default=86_400,
+        validation_alias=AliasChoices("jwt_expiry_seconds", "FORGE_JWT_EXPIRY_SECONDS"),
+        gt=0,
+        description="Session JWT lifetime in seconds (default 24h).",
+    )
+
     @field_validator("cors_allow_origins", mode="before")
     @classmethod
     def _coerce_cors(cls, value: object) -> object:

@@ -17,14 +17,22 @@ Layering
 from __future__ import annotations
 
 from app.users.enums import UserStatus
-from app.users.errors import UserNotFoundError
+from app.users.errors import GitHubAccountLinkedError, UserNotFoundError
 from app.users.models import User
-from app.users.service import create_user, get_user
+from app.users.service import (
+    create_user,
+    get_user,
+    get_user_by_github_id,
+    link_github_account,
+)
 
 __all__ = [
+    "GitHubAccountLinkedError",
     "User",
     "UserNotFoundError",
     "UserStatus",
     "create_user",
     "get_user",
+    "get_user_by_github_id",
+    "link_github_account",
 ]
