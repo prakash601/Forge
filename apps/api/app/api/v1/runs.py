@@ -30,6 +30,7 @@ breaks dependency introspection in some FastAPI versions.
 import asyncio
 import uuid
 from collections.abc import AsyncIterator
+from pathlib import Path as FsPath
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Path, Query, Request, status
@@ -37,11 +38,17 @@ from fastapi.responses import StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.auth.dependencies import get_current_user
+from app.auth.errors import NoGitHubCredentialError
+from app.auth.tokens import TokenCipher
 from app.core.errors import error_payload
 from app.core.logging import get_logger
 from app.db.session import get_session, get_session_factory
+from app.github.credentials import resolve_credential
+from app.github.errors import GitOperationError
+from app.github.repos import clone_repo, is_auth_failure, task_branch_name
 from app.orchestrator.orchestrator import Orchestrator
 from app.projects.errors import ProjectNotFoundError
+from app.projects.models import Project
 from app.projects.service import get_owned_project, list_owned_project_ids
 from app.runs import service
 from app.runs.details import RunDetails, get_run_details
@@ -63,6 +70,92 @@ from app.users.models import User
 
 router = APIRouter(prefix="/runs", tags=["runs"])
 log = get_logger(__name__)
+
+
+async def _clone_for_run(
+    request: Request,
+    session: AsyncSession,
+    *,
+    project: Project,
+    run_id: uuid.UUID,
+    task: str,
+) -> None:
+    """Clone the connected repo into the run workspace (repo-backed runs).
+
+    Sets ``run.branch``/``run.base_commit``. On any failure the run is
+    rolled back and the request fails: rejected credentials are 400
+    (user-fixable: reconnect), anything else 502. Messages are
+    redacted (URLs carry no credentials by construction).
+    """
+    request_id: str = request.state.request_id
+    settings = request.app.state.settings
+    assert project.repo_url is not None and project.github_credential_ref is not None
+    if not settings.credentials_key:
+        await session.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail={
+                "code": "AUTH_NOT_CONFIGURED",
+                "message": "Auth is not configured (missing credentials_key).",
+                "request_id": request_id,
+            },
+        )
+    try:
+        credential = await resolve_credential(
+            session,
+            ref=project.github_credential_ref,
+            cipher=TokenCipher(settings.credentials_key),
+        )
+    except (NoGitHubCredentialError, ValueError) as exc:
+        await session.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={
+                "code": "GITHUB_AUTH_ERROR",
+                "message": "No usable GitHub credential; reconnect the repository.",
+                "request_id": request_id,
+            },
+        ) from exc
+    branch = task_branch_name(task, run_id)
+    dest = FsPath(settings.workspace_root) / str(run_id)
+    try:
+        base_commit = await clone_repo(
+            repo_url=project.repo_url,
+            dest=dest,
+            branch=branch,
+            default_branch=project.default_branch,
+            credential=credential,
+        )
+    except GitOperationError as exc:
+        await session.rollback()
+        if is_auth_failure(exc):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail={
+                    "code": "GITHUB_AUTH_ERROR",
+                    "message": "GitHub rejected the credential; reconnect the repository.",
+                    "request_id": request_id,
+                },
+            ) from exc
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail={
+                "code": "GITHUB_UPSTREAM_ERROR",
+                "message": f"Could not clone the repository: {exc}",
+                "request_id": request_id,
+            },
+        ) from exc
+    run = await service.get_run(session, run_id)
+    run.branch = branch
+    run.base_commit = base_commit
+    await session.flush()
+    log.info(
+        "repo_cloned",
+        run_id=str(run_id),
+        branch=branch,
+        base_commit=base_commit[:12] if base_commit else None,
+        request_id=request_id,
+    )
 
 
 def _orchestrator(request: Request) -> Orchestrator | None:
@@ -105,6 +198,10 @@ async def create_run_endpoint(
             },
         ) from exc
     run = await service.create_run(session, task=payload.task, project_id=project.id)
+    await session.flush()  # populate run.id for the branch name
+    if project.repo_url:
+        await _clone_for_run(request, session, project=project, run_id=run.id, task=payload.task)
+        await session.refresh(run)
     await session.commit()
     log.info(
         "run_created",

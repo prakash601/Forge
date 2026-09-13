@@ -13,7 +13,7 @@ from fastapi import Depends, HTTPException, Request, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.auth.errors import InvalidSessionTokenError
-from app.auth.tokens import SESSION_COOKIE, decode_session_token
+from app.auth.tokens import SESSION_COOKIE, TokenCipher, decode_session_token
 from app.core.logging import get_logger
 from app.db.session import get_session
 from app.users.errors import UserNotFoundError
@@ -73,4 +73,29 @@ async def get_current_user(
         raise _unauthorized(request, "Invalid or expired session.") from exc
 
 
-__all__ = ["get_current_user"]
+def cipher_or_503(request: Request) -> TokenCipher:
+    """Build the credential cipher from settings, or 503 when unconfigured."""
+    settings = request.app.state.settings
+    if not settings.credentials_key:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail={
+                "code": "AUTH_NOT_CONFIGURED",
+                "message": "Auth is not configured (missing credentials_key).",
+                "request_id": request.state.request_id,
+            },
+        )
+    try:
+        return TokenCipher(settings.credentials_key)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail={
+                "code": "AUTH_NOT_CONFIGURED",
+                "message": "Auth is not configured (invalid credentials_key).",
+                "request_id": request.state.request_id,
+            },
+        ) from exc
+
+
+__all__ = ["cipher_or_503", "get_current_user"]

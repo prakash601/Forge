@@ -132,7 +132,8 @@ async def _truncate_all(engine: AsyncEngine) -> None:
     async with engine.connect() as conn:
         await conn.execute(
             text(
-                "TRUNCATE TABLE run_memories, run_reviews, run_diagnoses, run_test_results, "
+                "TRUNCATE TABLE pull_requests, github_credentials, run_memories, "
+                "run_reviews, run_diagnoses, run_test_results, "
                 "run_implementations, run_plans, run_analyses, memory_embeddings, "
                 "memory_items, projects, users, run_steps, runs RESTART IDENTITY CASCADE"
             )
@@ -622,8 +623,24 @@ def _wire_test_agents(registry: Any, factory: Any, workspace_root: Path) -> None
     from app.agents.debugger import DebuggerAgent
     from app.agents.reviewer import ReviewerAgent
     from app.agents.tester import TesterAgent
+    from app.auth.tokens import TokenCipher
+    from app.github.client import FakeGitHubAPIClient
+    from app.github.publisher import PublisherAgent
 
     _workspaces = WorkspaceManager(root=workspace_root, fixture_dir=FIXTURE_ROOT)
+    # PR publisher on COMPLETED (Phase 4, #018): fixture runs have no
+    # repo_url, so this no-ops — proving the hook is safe by default.
+    from cryptography.fernet import Fernet
+
+    registry.register(
+        _RunState.COMPLETED,
+        PublisherAgent(
+            session_factory=factory,
+            workspace_root=workspace_root,
+            github_client=FakeGitHubAPIClient(),
+            cipher=TokenCipher(Fernet.generate_key().decode()),
+        ),
+    )
     registry.register(
         _RunState.TESTING,
         TesterAgent(

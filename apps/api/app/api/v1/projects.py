@@ -17,12 +17,14 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, HTTPException, Path, Query, Request, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.auth.dependencies import get_current_user
+from app.auth.dependencies import cipher_or_503, get_current_user
 from app.core.logging import get_logger
 from app.db.session import get_session
+from app.github.errors import InvalidRepoConfigError, InvalidRepoURLError
+from app.github.service import connect_repo
 from app.projects import service
 from app.projects.errors import ProjectNotFoundError
-from app.projects.schemas import ProjectCreate, ProjectRead
+from app.projects.schemas import ProjectCreate, ProjectRead, RepoConnectRequest, RepoRead
 from app.users.models import User
 
 router = APIRouter(prefix="/projects", tags=["projects"])
@@ -102,6 +104,111 @@ async def list_projects_endpoint(
         session, current_user.id, limit=limit, offset=offset
     )
     return [ProjectRead.model_validate(p) for p in projects]
+
+
+@router.post(
+    "/{project_id}/repo",
+    response_model=RepoRead,
+    status_code=status.HTTP_200_OK,
+    summary="Connect a GitHub repository (owner only).",
+    responses={
+        404: {"description": "Project does not exist or is not yours."},
+        422: {"description": "Repo URL or branch invalid."},
+    },
+)
+async def connect_repo_endpoint(
+    request: Request,
+    payload: RepoConnectRequest,
+    session: Annotated[AsyncSession, Depends(get_session)],
+    current_user: Annotated[User, Depends(get_current_user)],
+    project_id: Annotated[uuid.UUID, Path(description="Project identifier (UUID).")],
+) -> RepoRead:
+    try:
+        project = await service.get_owned_project(session, project_id, current_user.id)
+    except ProjectNotFoundError as exc:
+        await session.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail={
+                "code": "RESOURCE_NOT_FOUND",
+                "message": str(exc),
+                "request_id": request.state.request_id,
+            },
+        ) from exc
+    cipher = cipher_or_503(request)
+    try:
+        project = await connect_repo(
+            session,
+            project=project,
+            repo_url=payload.repo_url,
+            default_branch=payload.default_branch,
+            credential=payload.credential,
+            cipher=cipher,
+        )
+    except (InvalidRepoURLError, InvalidRepoConfigError) as exc:
+        await session.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail={
+                "code": "VALIDATION_ERROR",
+                "message": str(exc),
+                "request_id": request.state.request_id,
+            },
+        ) from exc
+    await session.commit()
+    log.info(
+        "repo_connected",
+        project_id=str(project.id),
+        repo_url=project.repo_url,
+        request_id=request.state.request_id,
+    )
+    assert project.repo_url is not None
+    return RepoRead(
+        repo_url=project.repo_url,
+        default_branch=project.default_branch,
+        credential_set=project.github_credential_ref is not None,
+    )
+
+
+@router.get(
+    "/{project_id}/repo",
+    response_model=RepoRead,
+    status_code=status.HTTP_200_OK,
+    summary="Read the connected repository (owner only).",
+    responses={404: {"description": "Project missing, not yours, or no repo connected."}},
+)
+async def read_repo_endpoint(
+    request: Request,
+    session: Annotated[AsyncSession, Depends(get_session)],
+    current_user: Annotated[User, Depends(get_current_user)],
+    project_id: Annotated[uuid.UUID, Path(description="Project identifier (UUID).")],
+) -> RepoRead:
+    try:
+        project = await service.get_owned_project(session, project_id, current_user.id)
+    except ProjectNotFoundError as exc:
+        await session.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail={
+                "code": "RESOURCE_NOT_FOUND",
+                "message": str(exc),
+                "request_id": request.state.request_id,
+            },
+        ) from exc
+    if not project.repo_url:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail={
+                "code": "RESOURCE_NOT_FOUND",
+                "message": "No repository connected.",
+                "request_id": request.state.request_id,
+            },
+        )
+    return RepoRead(
+        repo_url=project.repo_url,
+        default_branch=project.default_branch,
+        credential_set=project.github_credential_ref is not None,
+    )
 
 
 __all__ = ["router"]

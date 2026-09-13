@@ -37,8 +37,43 @@ class ProjectRead(BaseModel):
     name: str
     description: str | None
     status: ProjectStatus
+    repo_url: str | None = None
+    default_branch: str = "main"
     created_at: datetime
     updated_at: datetime
 
 
-__all__ = ["ProjectCreate", "ProjectRead"]
+class RepoConnectRequest(BaseModel):
+    """Body for ``POST /api/v1/projects/{id}/repo``.
+
+    The PAT is write-only: accepted here, stored encrypted, never
+    returned by any endpoint.
+    """
+
+    repo_url: str = Field(
+        min_length=1,
+        max_length=2000,
+        description="https://github.com/<owner>/<repo> (no embedded credentials).",
+    )
+    default_branch: str = Field(
+        default="main",
+        min_length=1,
+        max_length=255,
+        description="Base branch for PRs.",
+    )
+    credential: str = Field(
+        min_length=1,
+        max_length=2000,
+        description="GitHub PAT with repo scope (write-only).",
+    )
+
+
+class RepoRead(BaseModel):
+    """Response view for a connected repository (credential never shown)."""
+
+    repo_url: str
+    default_branch: str
+    credential_set: bool = Field(description="Whether a credential is stored.")
+
+
+__all__ = ["ProjectCreate", "ProjectRead", "RepoConnectRequest", "RepoRead"]

@@ -17,7 +17,7 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.auth.dependencies import get_current_user
+from app.auth.dependencies import cipher_or_503, get_current_user
 from app.auth.errors import (
     GitHubOAuthError,
     NoGitHubEmailError,
@@ -26,7 +26,7 @@ from app.auth.errors import (
 from app.auth.github import GitHubOAuthClient, RealGitHubOAuthClient
 from app.auth.schemas import AuthStatus
 from app.auth.service import handle_oauth_callback
-from app.auth.tokens import SESSION_COOKIE, TokenCipher
+from app.auth.tokens import SESSION_COOKIE
 from app.core.logging import get_logger
 from app.db.session import get_session
 from app.users.errors import DuplicateUserEmailError, GitHubAccountLinkedError
@@ -46,16 +46,6 @@ def _not_configured(request: Request, missing: str) -> HTTPException:
             "request_id": request.state.request_id,
         },
     )
-
-
-def _cipher_or_503(request: Request) -> TokenCipher:
-    settings = request.app.state.settings
-    if not settings.credentials_key:
-        raise _not_configured(request, "credentials_key")
-    try:
-        return TokenCipher(settings.credentials_key)
-    except ValueError as exc:
-        raise _not_configured(request, "credentials_key (invalid)") from exc
 
 
 async def get_oauth_client(request: Request) -> GitHubOAuthClient:
@@ -122,7 +112,7 @@ async def github_callback(
     settings = request.app.state.settings
     if not settings.jwt_secret:
         raise _not_configured(request, "jwt_secret")
-    cipher = _cipher_or_503(request)
+    cipher = cipher_or_503(request)
     try:
         user, token = await handle_oauth_callback(
             session,

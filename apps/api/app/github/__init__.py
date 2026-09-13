@@ -10,6 +10,15 @@ in-memory inside one backend operation (clone, push, ``POST /pulls``).
 from __future__ import annotations
 
 from app.auth.errors import NoGitHubCredentialError
-from app.github.credentials import parse_credential_ref, resolve_credential
+from app.github.credentials import (
+    parse_credential_ref,
+    resolve_credential,
+    store_credential,
+)
 
-__all__ = ["NoGitHubCredentialError", "parse_credential_ref", "resolve_credential"]
+__all__ = [
+    "NoGitHubCredentialError",
+    "parse_credential_ref",
+    "resolve_credential",
+    "store_credential",
+]
