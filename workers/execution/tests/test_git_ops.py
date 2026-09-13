@@ -97,4 +97,4 @@ def test_registry_returns_local_executor(tmp_path: Path) -> None:
 
 def test_registry_rejects_unknown_kind(tmp_path: Path) -> None:
     with pytest.raises(ValueError, match="unknown executor kind"):
-        get_executor(kind="docker", workspace_path=tmp_path / "ws")
+        get_executor(kind="gvisor", workspace_path=tmp_path / "ws")
