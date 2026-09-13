@@ -18,9 +18,11 @@ logs/
 
 # ----- Environment -----
 .env
+.env.prod
 .env.local
 .env.*.local
 !.env.example
+!.env.prod.example
 
 # ----- Python -----
 __pycache__/

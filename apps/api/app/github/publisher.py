@@ -25,6 +25,7 @@ from app.core.logging import get_logger
 from app.github.client import GitHubAPIClient
 from app.github.errors import GitHubAPIError, GitOperationError
 from app.github.service import publish_pull_request
+from app.metrics.registry import record_pr_publication
 from app.runs.enums import RunState
 from app.runs.service import get_run
 
@@ -55,6 +56,7 @@ class PublisherAgent:
             return None
         request_id = str(getattr(context, "request_id", ""))
         if self._cipher is None:
+            record_pr_publication(outcome="skipped")
             log.info(
                 "publisher_skipped",
                 run_id=str(run_id),
@@ -89,6 +91,7 @@ class PublisherAgent:
             except (GitHubAPIError, GitOperationError) as exc:
                 # FAILED row is already recorded; the run stays COMPLETED.
                 await session.rollback()
+                record_pr_publication(outcome="failed")
                 log.warning(
                     "publisher_failed",
                     run_id=str(run.id),
@@ -98,6 +101,7 @@ class PublisherAgent:
                 )
                 return None
             if row is None:
+                record_pr_publication(outcome="skipped")
                 log.info(
                     "publisher_skipped",
                     run_id=str(run.id),
@@ -105,6 +109,7 @@ class PublisherAgent:
                     request_id=request_id,
                 )
             else:
+                record_pr_publication(outcome="published")
                 log.info(
                     "publisher_published",
                     run_id=str(run.id),

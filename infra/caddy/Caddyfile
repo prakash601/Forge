@@ -1,0 +1,25 @@
+# Caddyfile for the Forge single-host deployment (Phase 4, Issue #019).
+#
+# {$DOMAIN} serves the web UI at / and the API under /api/*. /metrics,
+# /health internals, Prometheus, and Grafana are NOT routed here —
+# metrics stay inside the compose network (see docker-compose.prod.yml).
+
+{$DOMAIN} {
+	encode gzip
+
+	# API (path prefix preserved: upstream serves /api/v1/*).
+	handle /api/* {
+		reverse_proxy api:8000
+	}
+
+	# Health check alias for load balancers that expect it at root.
+	handle /healthz {
+		uri replace /healthz /health
+		reverse_proxy api:8000
+	}
+
+	# Everything else is the dashboard.
+	handle {
+		reverse_proxy web:3000
+	}
+}
