@@ -71,6 +71,9 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         )
         from app.agents.tester import TesterAgent
         from app.agents.workspace import WorkspaceManager
+        from app.auth.tokens import TokenCipher
+        from app.github.client import RealGitHubAPIClient
+        from app.github.publisher import PublisherAgent
         from app.llm.registry import get_llm_provider
 
         _llm = get_llm_provider(
@@ -399,6 +402,24 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         )
         registry.register(RunState.REVIEWING, _reviewer)
         app.state.reviewer = _reviewer
+
+        # PR publisher on COMPLETED entry (Phase 4, Issue #018). Returns
+        # None always: the run stays COMPLETED; failures land on the
+        # pull_requests row. Skips silently without a credentials key.
+        _cipher: TokenCipher | None = None
+        if settings.credentials_key:
+            try:
+                _cipher = TokenCipher(settings.credentials_key)
+            except ValueError:
+                _cipher = None
+        _publisher = PublisherAgent(
+            session_factory=factory,
+            workspace_root=_Path(settings.workspace_root),
+            github_client=RealGitHubAPIClient(),
+            cipher=_cipher,
+        )
+        registry.register(RunState.COMPLETED, _publisher)
+        app.state.publisher = _publisher
 
         if settings.auto_approve:
             registry.register(RunState.AWAITING_APPROVAL, PolicyAutoApproveAgent())

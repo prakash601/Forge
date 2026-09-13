@@ -22,6 +22,7 @@ from app.agents.service import (
     get_review,
     get_test_result,
 )
+from app.github.service import get_pull_request
 from app.runs import service
 from app.runs.errors import RunNotFoundError
 from app.runs.schemas import RunRead
@@ -39,6 +40,9 @@ class RunDetails(BaseModel):
     review: dict[str, Any] | None = None
     memory_candidates: list[dict[str, Any]] = Field(default_factory=list)
     approved_by: str | None = None
+    pull_request: dict[str, Any] | None = Field(
+        default=None, description="Publication record, once the PR is opened (or failed)."
+    )
 
 
 async def get_run_details(session: AsyncSession, run_id: uuid.UUID) -> RunDetails:
@@ -56,6 +60,7 @@ async def get_run_details(session: AsyncSession, run_id: uuid.UUID) -> RunDetail
         (step.approved_by for step in run.steps if step.event == "plan_approved"),
         None,
     )
+    pull_request = await get_pull_request(session, run_id)
     return RunDetails(
         run=RunRead.model_validate(run),
         analysis=analysis.findings if analysis else None,
@@ -66,6 +71,18 @@ async def get_run_details(session: AsyncSession, run_id: uuid.UUID) -> RunDetail
         review=review.review if review else None,
         memory_candidates=list(memory.candidates) if memory else [],
         approved_by=approved_by,
+        pull_request=(
+            {
+                "pr_number": pull_request.pr_number,
+                "pr_url": pull_request.pr_url,
+                "head_branch": pull_request.head_branch,
+                "base_commit": pull_request.base_commit,
+                "status": pull_request.status,
+                "error": pull_request.error_redacted,
+            }
+            if pull_request is not None
+            else None
+        ),
     )
 
 

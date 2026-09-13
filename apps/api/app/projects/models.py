@@ -34,6 +34,14 @@ class Project(Base):
     )
     name: Mapped[str] = mapped_column(String(255), nullable=False)
     description: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # Connected GitHub repository (Phase 4, Issue #018; migration
+    # 0012). NULL until connected. The credential is an opaque ref
+    # (``cred:<uuid>``) — never a plaintext token.
+    repo_url: Mapped[str | None] = mapped_column(Text, nullable=True)
+    default_branch: Mapped[str] = mapped_column(
+        String(255), nullable=False, default="main", server_default="main"
+    )
+    github_credential_ref: Mapped[str | None] = mapped_column(Text, nullable=True)
     status: Mapped[ProjectStatus] = mapped_column(
         String(50),
         nullable=False,

@@ -1,34 +1,60 @@
-"""GitHub credential seam (Phase 4, Issue #015; consumed by #018).
+"""GitHub credential seam (Phase 4, Issues #015/#018).
 
-:func:`resolve_credential` decrypts the GitHub OAuth token behind an
-opaque ``ref`` (``user:<uuid>``, stored on projects as
-``github_credential_ref``) for one backend-only operation. It must
-only be called from inside :mod:`app.github` (clone/push/PR
-creation) — enforced by convention and code review; Python offers no
-cheaper runtime boundary. Never pass its return value to agent code,
-the sandbox, prompts, logs, or API responses.
+Refs are opaque strings:
+
+* ``user:<uuid>`` — the user's OAuth token from login (#015).
+* ``cred:<uuid>`` — a stored PAT row from repo-connect (#018).
+
+:func:`resolve_credential` decrypts either form for one backend-only
+operation. It must only be called from inside :mod:`app.github`
+(clone/push/PR creation) — enforced by convention and code review;
+Python offers no cheaper runtime boundary. Never pass its return
+value to agent code, the sandbox, prompts, logs, or API responses.
 """
 
 from __future__ import annotations
 
 import uuid
+from datetime import UTC, datetime
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.auth.errors import InvalidCredentialRefError, NoGitHubCredentialError
 from app.auth.tokens import TokenCipher
+from app.github.models import GitHubCredential
 from app.users.service import get_user
 
 
-def parse_credential_ref(ref: str) -> uuid.UUID:
-    """Parse an opaque ``user:<uuid>`` credential ref to a user id."""
+def parse_credential_ref(ref: str) -> tuple[str, uuid.UUID]:
+    """Parse an opaque ref into ``(scheme, id)``.
+
+    Accepted schemes are ``user`` and ``cred``. Raises
+    :class:`InvalidCredentialRefError` otherwise.
+    """
     scheme, _, value = ref.partition(":")
-    if scheme != "user" or not value:
+    if scheme not in ("user", "cred") or not value:
         raise InvalidCredentialRefError(f"Malformed credential ref: {ref!r}.")
     try:
-        return uuid.UUID(value)
+        return scheme, uuid.UUID(value)
     except ValueError as exc:
         raise InvalidCredentialRefError(f"Malformed credential ref: {ref!r}.") from exc
+
+
+async def store_credential(
+    session: AsyncSession,
+    *,
+    user_id: uuid.UUID,
+    token_encrypted: str,
+) -> str:
+    """Persist an encrypted PAT; return its opaque ``cred:<id>`` ref."""
+    credential = GitHubCredential(
+        user_id=user_id,
+        token_encrypted=token_encrypted,
+        created_at=datetime.now(UTC),
+    )
+    session.add(credential)
+    await session.flush()
+    return f"cred:{credential.id}"
 
 
 async def resolve_credential(
@@ -40,15 +66,27 @@ async def resolve_credential(
     """Return the decrypted GitHub token behind ``ref`` (backend-only).
 
     Raises :class:`InvalidCredentialRefError` on malformed refs and
-    :class:`NoGitHubCredentialError` when the user has no stored
-    credential. The caller must use the token in-memory and never
-    persist or expose it.
+    :class:`NoGitHubCredentialError` when nothing is stored behind it.
+    The caller must use the token in-memory and never persist or
+    expose it.
     """
-    user_id = parse_credential_ref(ref)
-    user = await get_user(session, user_id)
-    if not user.github_token_encrypted:
-        raise NoGitHubCredentialError(f"User {user_id} has no GitHub credential.")
-    return cipher.decrypt(user.github_token_encrypted)
+    scheme, credential_id = parse_credential_ref(ref)
+    encrypted: str | None = None
+    if scheme == "user":
+        user = await get_user(session, credential_id)
+        encrypted = user.github_token_encrypted
+    else:
+        row = await session.get(GitHubCredential, credential_id)
+        if row is not None:
+            encrypted = row.token_encrypted
+    if not encrypted:
+        raise NoGitHubCredentialError("No GitHub credential stored for this ref.")
+    return cipher.decrypt(encrypted)
 
 
-__all__ = ["NoGitHubCredentialError", "parse_credential_ref", "resolve_credential"]
+__all__ = [
+    "NoGitHubCredentialError",
+    "parse_credential_ref",
+    "resolve_credential",
+    "store_credential",
+]

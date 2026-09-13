@@ -76,6 +76,10 @@ class Run(Base):
         ForeignKey("projects.id", ondelete="CASCADE"),
         nullable=True,
     )
+    # Task branch + cloned base commit (Phase 4, Issue #018; migration
+    # 0012). Set at creation for repo-backed runs; NULL otherwise.
+    branch: Mapped[str | None] = mapped_column(Text, nullable=True)
+    base_commit: Mapped[str | None] = mapped_column(Text, nullable=True)
     version: Mapped[int] = mapped_column(BigInteger, nullable=False, default=0)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)

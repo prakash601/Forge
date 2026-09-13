@@ -45,6 +45,10 @@ class RunRead(BaseModel):
     project_id: uuid.UUID | None = Field(
         default=None, description="Owning project; null for legacy ownerless runs."
     )
+    branch: str | None = Field(default=None, description="Task branch; set for repo-backed runs.")
+    base_commit: str | None = Field(
+        default=None, description="Cloned base commit; set for repo-backed runs."
+    )
     version: int
     created_at: datetime
     updated_at: datetime

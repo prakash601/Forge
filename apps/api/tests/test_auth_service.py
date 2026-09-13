@@ -164,4 +164,5 @@ def test_parse_credential_ref_roundtrip() -> None:
     import uuid as _uuid
 
     uid = _uuid.uuid4()
-    assert parse_credential_ref(f"user:{uid}") == uid
+    assert parse_credential_ref(f"user:{uid}") == ("user", uid)
+    assert parse_credential_ref(f"cred:{uid}") == ("cred", uid)
