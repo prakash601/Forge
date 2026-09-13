@@ -34,6 +34,7 @@ from app.memory.service import (
     create_memory_item,
     get_memory_item,
     list_memory_items_for_project,
+    search_similar_memories,
 )
 
 __all__ = [
@@ -49,4 +50,5 @@ __all__ = [
     "embed_memory_item",
     "get_memory_item",
     "list_memory_items_for_project",
+    "search_similar_memories",
 ]

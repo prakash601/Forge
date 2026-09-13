@@ -152,36 +152,54 @@ Package managers:
 
 ## Local development
 
+No domain, TLS, or cloud services needed. Everything runs on your laptop.
+
 ### Prerequisites
 
 - Docker and Docker Compose v2.
-- Python 3.11+ and `uv` (https://docs.astral.sh/uv/).
-- Node.js 24+ and `pnpm` (https://pnpm.io/).
 
-### First-time setup
+That's it for the Docker path. For the host-reload path you also need
+Python 3.11+ with `uv`, and Node.js 24+ with `pnpm`.
+
+### Option A — one command (recommended)
 
 ```bash
-# 1. Copy environment template
+# First time only (local dev defaults, fake LLM/embeddings, dev secrets)
 cp .env.example .env
 
-# 2. Start local infrastructure (PostgreSQL + pgvector)
+# Build + start postgres, migrations, API, worker, web
+./scripts/local-up.sh
+# or detached: ./scripts/local-up.sh -d
+```
+
+Then open:
+
+- Web: http://localhost:3000
+- API health: http://localhost:8000/health
+- API readiness: http://localhost:8000/ready
+
+Log in with the **Continue locally** form (any email, e.g. `dev@local.test`).
+No GitHub OAuth needed: `POST /api/v1/auth/dev-login` mints a session
+cookie. GitHub login stays available if you add OAuth credentials later.
+The endpoint returns 403 in production.
+
+Stop with `docker compose down`. Data persists in the `forge-postgres-data`
+volume; `docker compose down -v` wipes it.
+
+### Option B — host processes with reload
+
+```bash
+cp .env.example .env
 docker compose up -d postgres
 
-# 3. Install Python dependencies for the API and worker
 export PATH="$HOME/.local/bin:$PATH"
 uv sync --directory apps/api
 uv sync --directory workers/execution
-
-# 4. Run database migrations
 uv run --directory apps/api alembic upgrade head
-
-# 5. Install Node dependencies for the web app
 pnpm install
 ```
 
-### Running the applications
-
-In three terminals (or with a process manager of your choice):
+In three terminals:
 
 ```bash
 # Terminal 1 — API on :8000
@@ -194,21 +212,51 @@ uv run --directory workers/execution python -m forge_worker
 pnpm --filter @forge/web dev
 ```
 
-Then open:
+### How local login works
 
-- Web: http://localhost:3000
-- API health: http://localhost:8000/health
-- API readiness: http://localhost:8000/ready
+- `.env` ships dev-only `FORGE_JWT_SECRET` / `FORGE_CREDENTIALS_KEY`
+  (local use only — never deploy these).
+- `POST /api/v1/auth/dev-login {"email": ...}` creates-or-finds the user
+  and sets the `forge_session` cookie. Disabled in production.
+- LLM/embeddings default to `fake` (no network, no keys). Set
+  `FORGE_LLM_PROVIDER=openai` / `FORGE_EMBEDDING_PROVIDER=openai` with
+  `OPENAI_API_KEY` only when you want real model calls.
 
-The Phase 0 home page shows the word **Forge** and a small indicator of backend connectivity. The API only exposes `GET /health` and `GET /ready` plus the versioned router under `/api/v1` (which is empty until Phase 1).
-
-### Running everything with Docker
+### Real LLM via OpenCode inference (needs your key)
 
 ```bash
-docker compose up
+# in .env — never commit this file
+FORGE_LLM_PROVIDER=opencode
+FORGE_LLM_API_KEY=<your-opencode-key>   # service-account key, Bearer auth
+FORGE_LLM_MODEL=kimi-k2.5               # chat model id (glm-5, minimax-m2.5, …)
+# FORGE_LLM_BASE_URL=                   # optional: custom gateway root
 ```
 
-This starts PostgreSQL plus optional `api`, `worker`, and `web` profiles. See [`docker-compose.yml`](docker-compose.yml) for the current set of services and profiles.
+Then rebuild the API and restart:
+
+```bash
+docker compose up --build -d
+```
+
+This calls `https://opencode.ai/inference/openai/v1/chat/completions`
+(OpenAI-compatible). Strict JSON-schema mode is tried first; if the
+gateway rejects it, Forge retries once in plain-JSON mode. Token usage
+is logged per call (`llm_call` events) and visible at `/metrics`.
+
+### Real embeddings via Gemini (free tier)
+
+Get a free key at Google AI Studio (`aistudio.google.com`), then in `.env`:
+
+```bash
+FORGE_EMBEDDING_PROVIDER=gemini
+GEMINI_API_KEY=<your-key>
+```
+
+Then `docker compose up --build -d`. This uses `gemini-embedding-001`
+with 1536-dim output, so it fits the existing `VECTOR(1536)` column —
+no migration. Keep `FORGE_EMBEDDING_DIMENSION=1536`. Watch
+`memory_embedding_attempt` lines in the API logs for per-item
+success/failure.
 
 ---
 

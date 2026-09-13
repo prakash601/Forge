@@ -235,3 +235,91 @@ async def test_llm_calls_emit_forge_counters() -> None:
         await failing.complete_json("prompt", EchoOutput)
     snapshot = metrics.get_counters()
     assert snapshot.get(("forge_llm_calls_total", "fake", "fake-llm", "error"), 0) == 1
+
+
+def _recording_client(responses: list[tuple[int, dict[str, Any]]]):  # type: ignore[no-untyped-def]
+    import httpx
+
+    seen: list[httpx.Request] = []
+    queue = list(responses)
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request)
+        status, payload = queue.pop(0) if queue else (500, {})
+        return httpx.Response(status, json=payload)
+
+    client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    return client, seen
+
+
+async def test_openai_provider_posts_to_configured_base_url() -> None:
+    import json
+
+    from app.llm.openai_provider import OpenAILLMProvider
+
+    payload = _chat_payload(json.dumps({"text": "hi", "count": 1}))
+    client, seen = _recording_client([(200, payload)])
+    provider = OpenAILLMProvider(api_key="k", client=client, base_url="https://example.test/v1/")
+    result = await provider.complete_json("prompt", EchoOutput)
+    assert isinstance(result.parsed, EchoOutput)
+    assert len(seen) == 1
+    assert str(seen[0].url) == "https://example.test/v1/chat/completions"
+    assert seen[0].headers["authorization"] == "Bearer k"
+
+
+async def test_openai_provider_falls_back_when_strict_rejected() -> None:
+    import json as _json
+
+    from app.llm.openai_provider import OpenAILLMProvider
+
+    strict_error = {"error": {"message": "response_format not supported"}}
+    plain_ok = _chat_payload('```json\n{"text": "fallback", "count": 7}\n```')
+    client, seen = _recording_client([(400, strict_error), (200, plain_ok)])
+    provider = OpenAILLMProvider(api_key="k", client=client)
+    result = await provider.complete_json("prompt", EchoOutput)
+    assert result.parsed.text == "fallback"
+    assert result.parsed.count == 7
+    assert len(seen) == 2
+    first_body = _json.loads(seen[0].content.decode())
+    second_body = _json.loads(seen[1].content.decode())
+    assert "response_format" in first_body
+    assert "response_format" not in second_body
+
+
+async def test_openai_provider_no_retry_on_500() -> None:
+    from app.llm.errors import LLMProviderError
+    from app.llm.openai_provider import OpenAILLMProvider
+
+    client, seen = _recording_client([(500, {"error": "boom"})])
+    provider = OpenAILLMProvider(api_key="k", client=client)
+    with pytest.raises(LLMProviderError):
+        await provider.complete_json("prompt", EchoOutput)
+    assert len(seen) == 1
+
+
+async def test_registry_returns_opencode_with_inference_base_url() -> None:
+    from app.llm.openai_provider import OpenAILLMProvider
+    from app.llm.registry import get_llm_provider
+
+    provider = get_llm_provider(provider_name="opencode", api_key="opaque-key")
+    assert provider.name == "opencode"
+    assert isinstance(provider, OpenAILLMProvider)
+    assert provider._base_url == OpenAILLMProvider.OPENCODE_BASE_URL
+
+    custom = get_llm_provider(provider_name="opencode", base_url="https://gw.test/v1")
+    assert isinstance(custom, OpenAILLMProvider)
+    assert custom._base_url == "https://gw.test/v1"
+
+
+def test_llm_settings_base_url_and_key_alias(monkeypatch: pytest.MonkeyPatch) -> None:
+    from app.config import Settings
+
+    monkeypatch.delenv("FORGE_LLM_BASE_URL", raising=False)
+    monkeypatch.delenv("FORGE_LLM_API_KEY", raising=False)
+    assert Settings().llm_base_url is None
+
+    monkeypatch.setenv("FORGE_LLM_BASE_URL", "https://gw.test/v1")
+    monkeypatch.setenv("FORGE_LLM_API_KEY", "llm-key")
+    settings = Settings()
+    assert settings.llm_base_url == "https://gw.test/v1"
+    assert settings.openai_api_key == "llm-key"

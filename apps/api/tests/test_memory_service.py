@@ -191,3 +191,96 @@ async def test_memory_type_enum_values_present() -> None:
     """Sanity: the enum values match what we expect callers to send."""
     assert MemoryType.DECISION.value == "decision"
     assert MemoryType.CONVENTION.value == "convention"
+
+
+def _unit_vec(index: int, dims: int = 1536) -> list[float]:
+    vec = [0.0] * dims
+    vec[index] = 1.0
+    return vec
+
+
+async def _make_embedded_item(
+    session: AsyncSession,
+    project_id: uuid.UUID,
+    content: str,
+    vector: list[float] | None,
+    status: MemoryStatus = MemoryStatus.ACTIVE,
+) -> uuid.UUID:
+    from app.memory.models import MemoryEmbedding
+
+    item = await service.create_memory_item(
+        session, project_id=project_id, memory_type="fact", content=content
+    )
+    item.status = status
+    emb_row = (
+        await session.execute(
+            select(MemoryEmbedding).where(MemoryEmbedding.memory_item_id == item.id)
+        )
+    ).scalar_one()
+    emb_row.embedding = vector
+    await session.flush()
+    return item.id
+
+
+async def test_search_returns_nearest_first(session: AsyncSession) -> None:
+    _, project_id = await _make_user_and_project(session)
+    await _make_embedded_item(session, project_id, "orthogonal", _unit_vec(1))
+    await _make_embedded_item(session, project_id, "nearest", _unit_vec(0))
+    found = await service.search_similar_memories(
+        session, project_id=project_id, query_embedding=_unit_vec(0), limit=5
+    )
+    assert [i.content for i in found] == ["nearest", "orthogonal"]
+
+
+async def test_search_scopes_to_project(session: AsyncSession) -> None:
+    _, project_a = await _make_user_and_project(session)
+    user_b = await users_service.create_user(session, email="other@x.com")
+    await session.commit()
+    from app.projects import service as projects_service
+
+    project_b = await projects_service.create_project(session, owner_id=user_b.id, name="other")
+    await session.commit()
+    await _make_embedded_item(session, project_b.id, "foreign", _unit_vec(0))
+    found = await service.search_similar_memories(
+        session, project_id=project_a, query_embedding=_unit_vec(0), limit=5
+    )
+    assert found == []
+
+
+async def test_search_skips_null_and_inactive(session: AsyncSession) -> None:
+    _, project_id = await _make_user_and_project(session)
+    await _make_embedded_item(session, project_id, "no-vector", None)
+    await _make_embedded_item(
+        session, project_id, "retired", _unit_vec(0), status=MemoryStatus.SUPERSEDED
+    )
+    found = await service.search_similar_memories(
+        session, project_id=project_id, query_embedding=_unit_vec(0), limit=5
+    )
+    assert found == []
+
+
+async def test_search_respects_limit_and_validates(session: AsyncSession) -> None:
+    import pytest
+
+    _, project_id = await _make_user_and_project(session)
+    for n in range(3):
+        await _make_embedded_item(session, project_id, f"m{n}", _unit_vec(0))
+    found = await service.search_similar_memories(
+        session, project_id=project_id, query_embedding=_unit_vec(0), limit=2
+    )
+    assert len(found) == 2
+    with pytest.raises(ValueError):
+        await service.search_similar_memories(
+            session, project_id=project_id, query_embedding=[], limit=2
+        )
+    with pytest.raises(ValueError):
+        await service.search_similar_memories(
+            session, project_id=project_id, query_embedding=_unit_vec(0), limit=0
+        )
+
+
+async def test_search_unknown_project_returns_empty(session: AsyncSession) -> None:
+    found = await service.search_similar_memories(
+        session, project_id=uuid.uuid4(), query_embedding=_unit_vec(0), limit=5
+    )
+    assert found == []
