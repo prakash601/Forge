@@ -167,3 +167,8 @@ jobs:
 
       - name: Web build
         run: pnpm --filter @forge/web build
+
+      - name: Sandbox image build
+        # Proves infra/docker/sandbox.Dockerfile builds (Issue #017).
+        # Registry push + digest reference ride the prod deploy (#019).
+        run: docker build -f infra/docker/sandbox.Dockerfile -t forge-sandbox:ci .

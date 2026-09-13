@@ -2,6 +2,12 @@
 
 from __future__ import annotations
 
+from forge_worker.sandbox.docker import (
+    DockerExecutorConfig,
+    DockerWorkspaceExecutor,
+    container_env,
+    workspace_disk_bytes,
+)
 from forge_worker.sandbox.errors import ToolError
 from forge_worker.sandbox.local import (
     ExecutorConfig,
@@ -24,6 +30,8 @@ from forge_worker.sandbox.store import InMemoryToolCallStore
 
 __all__ = [
     "CommandResult",
+    "DockerExecutorConfig",
+    "DockerWorkspaceExecutor",
     "EditResult",
     "ExecutorConfig",
     "FileContent",
@@ -36,6 +44,8 @@ __all__ = [
     "ToolCallStore",
     "ToolError",
     "WriteResult",
+    "container_env",
     "get_executor",
     "sanitize_env",
+    "workspace_disk_bytes",
 ]
