@@ -4,7 +4,7 @@ version = "0.1.0"
 description = "Forge control-plane API (FastAPI)"
 requires-python = ">=3.11"
 dependencies = [
-    "fastapi>=0.115,<0.142",
+    "fastapi>=0.115,<0.143",
     "uvicorn[standard]>=0.30,<0.53",
     "pydantic>=2.7,<3",
     "pydantic-settings>=2.4,<3",
