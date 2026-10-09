@@ -4,6 +4,11 @@ Sessions are stateless HS256 JWTs (``sub`` = user id, ``iat``/``exp``).
 GitHub OAuth access tokens are stored Fernet-encrypted and are only
 readable via the ``resolve_credential`` seam — never serialized into
 API responses, logs, or agent contexts.
+
+Lifetime and rotation: session lifetime is ``jwt_expiry_seconds``
+(default 24h). There is no server-side revocation — rotating the
+secret invalidates every session at once, so plan rotations as
+log-everybody-out events.
 """
 
 from __future__ import annotations

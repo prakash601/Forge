@@ -95,6 +95,8 @@ def install_exception_handlers(app: FastAPI) -> None:
                 message=message,
                 request_id=request.state.request_id,
             ),
+            # Preserve endpoint-set headers (e.g. Retry-After on 429).
+            headers=dict(exc.headers) if exc.headers else None,
         )
 
     @app.exception_handler(RequestValidationError)

@@ -10,9 +10,10 @@
 export function serverApiBaseUrl(searchParams: {
   [key: string]: string | string[] | undefined;
 }): string {
-  if (typeof searchParams.api === "string" && searchParams.api) {
-    return searchParams.api;
-  }
+  // NOTE: a `?api=` query override used to live here. It let any URL
+  // drive server-side fetch (SSRF), so it was removed (Issue #82) —
+  // the API origin comes from the environment only.
+  void searchParams;
   return process.env.API_BASE_URL ?? "http://localhost:8000";
 }
 
