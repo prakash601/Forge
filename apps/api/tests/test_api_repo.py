@@ -142,3 +142,42 @@ async def test_run_create_clone_upstream_failure_is_502(authed_client: AsyncClie
     )
     assert created.status_code == 502
     assert created.json()["error"]["code"] == "GITHUB_UPSTREAM_ERROR"
+
+
+async def test_run_create_clone_failure_cleans_dest(
+    authed_client: AsyncClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Issue #81: a failed clone removes the partial workspace dir."""
+    from pathlib import Path
+
+    import app.api.v1.runs as runs_api
+    from app.github.errors import GitOperationError
+
+    project = await ensure_project(authed_client)
+    assert (await _connect(authed_client, project["id"])).status_code == 200
+
+    created: list[Path] = []
+
+    async def dirty_clone(**kwargs: Any) -> str:
+        import asyncio
+        import os
+
+        dest = str(kwargs["dest"])
+
+        def _dirty() -> None:
+            os.makedirs(dest, exist_ok=True)
+            with open(os.path.join(dest, "partial"), "w") as fh:
+                fh.write("half-cloned")
+
+        await asyncio.to_thread(_dirty)
+        created.append(Path(dest))
+        raise GitOperationError("clone failed: Authentication failed")
+
+    monkeypatch.setattr(runs_api, "clone_repo", dirty_clone)
+    response = await authed_client.post(
+        "/api/v1/runs", json={"task": "Do thing", "project_id": project["id"]}
+    )
+    assert response.status_code == 400
+    assert created, "clone was not attempted"
+    assert not created[0].exists(), "partial dest was not cleaned up"
+    assert (await authed_client.get("/api/v1/runs")).json()["total"] == 0

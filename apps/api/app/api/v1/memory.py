@@ -48,7 +48,14 @@ def _schedule_embedding(request: Request, memory_item_id: uuid.UUID) -> None:
         factory = get_session_factory()
         async with factory() as embed_session:
             try:
-                ok = await pipeline.embed_memory_item(embed_session, memory_item_id, provider)
+                ok = await pipeline.embed_memory_item(
+                    embed_session,
+                    memory_item_id,
+                    provider,
+                    expected_dimension=(
+                        settings.embedding_dimension if settings is not None else None
+                    ),
+                )
                 await embed_session.commit()
                 log.info(
                     "memory_embedding_scheduled_done",
