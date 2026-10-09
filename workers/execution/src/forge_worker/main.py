@@ -5,8 +5,10 @@ Phase 0 responsibilities:
 1. Load configuration.
 2. Initialize structured logging.
 3. Print `Forge worker started`.
-4. Wait for `SIGINT` / `SIGTERM`.
-5. Shut down gracefully and exit 0.
+4. Reap orphaned sandbox containers left by a crashed run (docker
+   backend only; best-effort).
+5. Wait for `SIGINT` / `SIGTERM`.
+6. Shut down gracefully and exit 0.
 
 The worker deliberately does NOT:
 
@@ -16,11 +18,27 @@ The worker deliberately does NOT:
 - Run agents.
 
 Those capabilities land in Phase 5 (Execution Worker + Docker Sandbox).
+Phase 5 job-loop contract (Issue #84 — design, not implementation):
+
+- One run per job, idempotent on `(run_id, command_counter)`: a
+  retried command reuses the recorded artifact instead of re-running.
+- Graceful drain on SIGTERM: finish the in-flight command (up to its
+  timeout), checkpoint, then exit — never abandon mid-write.
+- Retry/backoff on transient failures (image pull, daemon busy);
+  permanent failures (quota, OOM, timeout) are terminal results,
+  not retries.
+- Orphan cleanup: containers are named `forge-<run_id>-<NNNN>` so a
+  fresh worker can reap crash leftovers at startup (see
+  :func:`_reap_stale_sandbox_containers`); in-flight cleanup stays on
+  the timeout path.
+- Budgets in `config.py` (`run_max_seconds`, `run_max_commands`) are
+  enforced by the loop, not by the executors.
 """
 
 from __future__ import annotations
 
 import asyncio
+import re
 import signal
 import sys
 from types import FrameType
@@ -29,6 +47,37 @@ from forge_worker.config import Settings, get_settings
 from forge_worker.logging import configure_logging, get_logger
 
 log = get_logger(__name__)
+
+# Container names minted per command (`forge-<run_id>-<NNNN>`); the
+# worker's own containers never match, so reaping this pattern at
+# startup cannot remove the worker itself.
+_ORPHAN_CONTAINER_RE = re.compile(r"^forge-[0-9a-fA-F-]{36}-\d{4}$")
+
+
+async def _reap_stale_sandbox_containers() -> int:
+    """Remove crash-orphaned `forge-<run_id>-<NNNN>` containers.
+
+    Best-effort: any failure (no daemon, no permission) is logged and
+    yields 0. Returns the count removed.
+    """
+    try:
+        import docker
+    except ImportError:
+        return 0
+    try:
+        client = await asyncio.to_thread(docker.from_env, timeout=10)
+        containers = await asyncio.to_thread(client.containers.list, all=True)
+        removed = 0
+        for container in containers:
+            if _ORPHAN_CONTAINER_RE.match(container.name or ""):
+                await asyncio.to_thread(container.remove, force=True)
+                removed += 1
+        if removed:
+            log.info("worker_orphans_reaped", count=removed)
+        return removed
+    except Exception as exc:
+        log.warning("worker_orphan_reap_failed", error=str(exc))
+        return 0
 
 
 class Worker:
@@ -94,6 +143,9 @@ class Worker:
 
         loop = asyncio.get_running_loop()
         self._install_signal_handlers(loop)
+
+        if self._settings.sandbox_backend == "docker":
+            await _reap_stale_sandbox_containers()
 
         try:
             await self._shutdown_event.wait()

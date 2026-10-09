@@ -93,6 +93,10 @@ services:
       DATABASE_URL: postgresql+asyncpg://forge:forge@postgres:5432/forge
       ENVIRONMENT: development
       LOG_LEVEL: INFO
+    # Sandbox containers run against the host daemon (same as prod):
+    # required for FORGE_SANDBOX_BACKEND=docker locally (Issue #84).
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
     command: ["uv", "run", "python", "-m", "forge_worker"]
 
   web:

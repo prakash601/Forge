@@ -21,6 +21,13 @@ Container contract (decided in #58):
   never enter the container.
 * Timeouts mirror the local executor; OOM kills map to
   ``SANDBOX_RESOURCE_LIMIT``.
+* Disk quota is a pre-run ``du`` guard, not a live limit (accepted
+  risk, Issue #84): a command that fills disk mid-run is caught on
+  the next command's check. A hard mid-run bound needs driver-level
+  storage options (``storage_opt size=`` is driver-dependent and
+  unavailable on the default driver), so the guard plus per-command
+  timeouts (which bound the fill rate) is the single-host posture.
+  XFS project quotas would close this if it ever matters.
 
 Placement note: this executor still runs on the worker host (it talks
 to the host daemon). Moving execution off the API host entirely needs
