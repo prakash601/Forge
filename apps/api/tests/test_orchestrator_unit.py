@@ -534,3 +534,49 @@ def _patch_apply_transition(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(orch_mod, "apply_transition", recording)
     yield
     monkeypatch.setattr(orch_mod, "apply_transition", original)
+
+
+async def test_snapshot_session_closed_before_agent_runs() -> None:
+    """Issue #81: the load-phase session closes before ``agent.run()``.
+
+    The orchestrator must not hold a session across the agent's own
+    (potentially minutes-long) I/O — the agent only sees a detached
+    snapshot. The agent returning ``None`` also proves no second
+    (apply-phase) session is opened in that case.
+    """
+    events: list[str] = []
+    spy = _TransitionSpy()
+    inner = spy.session_factory()
+
+    async def factory() -> _RecordingTransitionSession:
+        sess = await inner()
+        original_close = sess.close
+
+        async def close() -> None:
+            events.append("session-closed")
+            await original_close()
+
+        sess.close = close  # type: ignore[method-assign]
+        return sess
+
+    class _ProbeAgent(_RecordingAgent):
+        async def run(self, context: AgentContext) -> str | None:
+            events.append("agent-ran")
+            assert context.run_id is not None
+            return None
+
+    driver = StateAgentRegistry()
+    driver.register(RunState.CREATED, _ProbeAgent("probe", return_value=None))
+    runtime = InProcessRuntime()
+    orchestrator = Orchestrator(driver=driver, runtime=runtime, session_factory=factory)
+    run_id = uuid.uuid4()
+    orchestrator.handle_transition(
+        run_id=run_id,
+        from_state=RunState.CREATED,
+        to_state=RunState.CREATED,
+        event="<create>",
+        request_id="req_test",
+    )
+    await runtime.shutdown()
+    assert events == ["session-closed", "agent-ran"]
+    assert spy.applied == []

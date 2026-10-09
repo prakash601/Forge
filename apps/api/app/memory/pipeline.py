@@ -34,11 +34,17 @@ async def embed_memory_item(
     *,
     max_attempts: int = 3,
     retry_delays: tuple[float, ...] = DEFAULT_RETRY_DELAYS,
+    expected_dimension: int | None = None,
 ) -> bool:
     """Embed a single memory item. Returns True if newly embedded.
 
     Returns False when the row already had a vector (no-op) or when
     the item ended in ``EMBEDDING_FAILED`` after exhausting retries.
+
+    ``expected_dimension`` defaults to :data:`EXPECTED_DIMENSION`
+    (1536, matching the ``VECTOR`` column); pass
+    ``settings.embedding_dimension`` so non-default deployments don't
+    fail every item (Issue #81).
 
     Raises:
         MemoryItemNotFoundError: unknown ``memory_item_id``.
@@ -47,6 +53,7 @@ async def embed_memory_item(
     from sqlalchemy.ext.asyncio import AsyncSession
 
     assert isinstance(session, AsyncSession)
+    expected = EXPECTED_DIMENSION if expected_dimension is None else expected_dimension
     item = await session.get(MemoryItem, memory_item_id)
     if item is None:
         raise MemoryItemNotFoundError(str(memory_item_id))
@@ -88,7 +95,7 @@ async def embed_memory_item(
                     await asyncio.sleep(delay)
             continue
         latency_ms = int((time.perf_counter() - start) * 1000)
-        if len(vector) != EXPECTED_DIMENSION:
+        if len(vector) != expected:
             item.status = MemoryStatus.EMBEDDING_FAILED
             await session.flush()
             log.warning(
@@ -98,7 +105,7 @@ async def embed_memory_item(
                 latency_ms=latency_ms,
                 attempt=attempt,
                 outcome="dimension-mismatch",
-                error=str(EmbeddingDimensionMismatchError(EXPECTED_DIMENSION, len(vector))),
+                error=str(EmbeddingDimensionMismatchError(expected, len(vector))),
             )
             return False
         emb_row.embedding = vector
@@ -134,6 +141,7 @@ async def backfill_missing(
     batch_size: int = 100,
     max_attempts: int = 3,
     project_id: uuid.UUID | None = None,
+    expected_dimension: int | None = None,
 ) -> int:
     """Embed all rows with NULL vectors. Returns count newly embedded."""
     from sqlalchemy.ext.asyncio import AsyncSession
@@ -151,7 +159,13 @@ async def backfill_missing(
     ids = list((await session.execute(stmt)).scalars().all())
     done = 0
     for memory_item_id in ids:
-        if await embed_memory_item(session, memory_item_id, provider, max_attempts=max_attempts):
+        if await embed_memory_item(
+            session,
+            memory_item_id,
+            provider,
+            max_attempts=max_attempts,
+            expected_dimension=expected_dimension,
+        ):
             done += 1
     return done
 

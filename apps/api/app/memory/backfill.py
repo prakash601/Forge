@@ -31,7 +31,11 @@ async def _run(project_id: uuid.UUID | None, batch_size: int) -> int:
     async with factory() as session:
         while True:
             done = await pipeline.backfill_missing(
-                session, provider, batch_size=batch_size, project_id=project_id
+                session,
+                provider,
+                batch_size=batch_size,
+                project_id=project_id,
+                expected_dimension=settings.embedding_dimension,
             )
             await session.commit()
             total += done

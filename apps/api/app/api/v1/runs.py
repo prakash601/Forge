@@ -61,6 +61,7 @@ from app.runs.errors import (
     TerminalStateError,
     UnknownEventError,
 )
+from app.runs.models import Run
 from app.runs.schemas import (
     RunCreateRequest,
     RunEventRequest,
@@ -75,51 +76,29 @@ log = get_logger(__name__)
 
 
 async def _clone_for_run(
-    request: Request,
-    session: AsyncSession,
     *,
+    credential: str,
+    workspace_root: str,
     project: Project,
     run_id: uuid.UUID,
     task: str,
-) -> None:
+    request_id: str,
+) -> tuple[str, str]:
     """Clone the connected repo into the run workspace (repo-backed runs).
 
-    Sets ``run.branch``/``run.base_commit``. On any failure the run is
-    rolled back and the request fails: rejected credentials are 400
-    (user-fixable: reconnect), anything else 502. Messages are
-    redacted (URLs carry no credentials by construction).
+    Pure git work: no session, no transaction — the caller commits the
+    Run *before* calling this so no DB connection is held across the
+    (up to 120s) network operation (Issue #81). Returns
+    ``(branch, base_commit)``. On failure the partial ``dest`` is
+    removed (best-effort) so retries never hit "destination exists".
+
+    Errors surface as the same HTTP codes as before: rejected
+    credentials are 400 (user-fixable: reconnect), anything else 502.
+    Messages are redacted (URLs carry no credentials by construction).
     """
-    request_id: str = request.state.request_id
-    settings = request.app.state.settings
-    assert project.repo_url is not None and project.github_credential_ref is not None
-    if not settings.credentials_key:
-        await session.rollback()
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail={
-                "code": "AUTH_NOT_CONFIGURED",
-                "message": "Auth is not configured (missing credentials_key).",
-                "request_id": request_id,
-            },
-        )
-    try:
-        credential = await resolve_credential(
-            session,
-            ref=project.github_credential_ref,
-            cipher=TokenCipher(settings.credentials_key),
-        )
-    except (NoGitHubCredentialError, ValueError) as exc:
-        await session.rollback()
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail={
-                "code": "GITHUB_AUTH_ERROR",
-                "message": "No usable GitHub credential; reconnect the repository.",
-                "request_id": request_id,
-            },
-        ) from exc
+    assert project.repo_url is not None
     branch = task_branch_name(task, run_id)
-    dest = FsPath(settings.workspace_root) / str(run_id)
+    dest = FsPath(workspace_root) / str(run_id)
     try:
         base_commit = await clone_repo(
             repo_url=project.repo_url,
@@ -129,7 +108,9 @@ async def _clone_for_run(
             credential=credential,
         )
     except GitOperationError as exc:
-        await session.rollback()
+        import shutil
+
+        shutil.rmtree(dest, ignore_errors=True)
         if is_auth_failure(exc):
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
@@ -147,10 +128,6 @@ async def _clone_for_run(
                 "request_id": request_id,
             },
         ) from exc
-    run = await service.get_run(session, run_id)
-    run.branch = branch
-    run.base_commit = base_commit
-    await session.flush()
     log.info(
         "repo_cloned",
         run_id=str(run_id),
@@ -158,6 +135,7 @@ async def _clone_for_run(
         base_commit=base_commit[:12] if base_commit else None,
         request_id=request_id,
     )
+    return branch, base_commit
 
 
 def _orchestrator(request: Request) -> Orchestrator | None:
@@ -199,12 +177,67 @@ async def create_run_endpoint(
                 "request_id": request_id,
             },
         ) from exc
-    run = await service.create_run(session, task=payload.task, project_id=project.id)
-    await session.flush()  # populate run.id for the branch name
+    # Resolve the credential up-front (short read, no network yet) so
+    # the clone step below needs no session at all.
+    credential: str | None = None
     if project.repo_url:
-        await _clone_for_run(request, session, project=project, run_id=run.id, task=payload.task)
-        await session.refresh(run)
+        assert project.github_credential_ref is not None
+        settings = request.app.state.settings
+        if not settings.credentials_key:
+            await session.rollback()
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail={
+                    "code": "AUTH_NOT_CONFIGURED",
+                    "message": "Auth is not configured (missing credentials_key).",
+                    "request_id": request_id,
+                },
+            )
+        try:
+            credential = await resolve_credential(
+                session,
+                ref=project.github_credential_ref,
+                cipher=TokenCipher(settings.credentials_key),
+            )
+        except (NoGitHubCredentialError, ValueError) as exc:
+            await session.rollback()
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail={
+                    "code": "GITHUB_AUTH_ERROR",
+                    "message": "No usable GitHub credential; reconnect the repository.",
+                    "request_id": request_id,
+                },
+            ) from exc
+    # Commit the Run BEFORE any network I/O: the clone below can take
+    # up to 120s and must not hold a DB transaction/connection (Issue
+    # #81). The request session stays open but transaction-free, so
+    # its pooled connection is released between statements.
+    run = await service.create_run(session, task=payload.task, project_id=project.id)
+    run_id = run.id
     await session.commit()
+    if project.repo_url:
+        assert credential is not None
+        try:
+            branch, base_commit = await _clone_for_run(
+                credential=credential,
+                workspace_root=request.app.state.settings.workspace_root,
+                project=project,
+                run_id=run_id,
+                task=payload.task,
+                request_id=request_id,
+            )
+        except HTTPException as exc:
+            # Preserve the historical contract: a failed clone leaves
+            # no Run behind (steps cascade-delete with it).
+            doomed = await service.get_run(session, run_id)
+            await session.delete(doomed)
+            await session.commit()
+            raise exc
+        run = await service.get_run(session, run_id)
+        run.branch = branch
+        run.base_commit = base_commit
+        await session.commit()
     record_run_created()
     log.info(
         "run_created",
@@ -453,6 +486,33 @@ def _sse(event: str, data: object) -> str:
     return f"event: {event}\ndata: {_json.dumps(data)}\n\n"
 
 
+def _diff_frames(run: Run, last_state: RunState | None, last_sequence: int) -> list[str]:
+    """Build SSE frames for what changed since the last poll.
+
+    First poll emits the full ``snapshot``; later polls emit
+    ``state_changed`` and one ``step_added`` per new step.
+    """
+    if last_state is None:
+        return [_sse("snapshot", RunRead.model_validate(run).model_dump(mode="json"))]
+    frames: list[str] = []
+    if run.state != last_state:
+        frames.append(
+            _sse(
+                "state_changed",
+                {"state": run.state.value, "version": run.version},
+            )
+        )
+    for step in run.steps:
+        if step.sequence > last_sequence:
+            frames.append(
+                _sse(
+                    "step_added",
+                    RunStepRead.model_validate(step).model_dump(mode="json"),
+                )
+            )
+    return frames
+
+
 async def _run_events(
     *,
     run_id: uuid.UUID,
@@ -471,37 +531,33 @@ async def _run_events(
     Ownership is re-checked on every poll (not just the HTTP
     handshake) so a reassigned or deleted project closes the stream
     instead of leaking it (#016).
+
+    Idle polls are cheap: the run row (state + version) is compared
+    first and the step history is only reloaded when the version
+    moved — every step is appended by ``transition()``, which bumps
+    the version, so an unchanged version means no new steps (Issue
+    #81).
     """
     factory = get_session_factory()
-    loop = asyncio.get_event_loop()
+    loop = asyncio.get_running_loop()
     last_state: RunState | None = None
+    last_version: int | None = None
     last_sequence = 0
     last_beat = loop.time()
     while True:
-        session = factory()
-        try:
+        async with factory() as session:
             try:
                 run = await service.get_owned_run(session, run_id, owner_id)
             except RunNotFoundError:
                 yield _sse("error", {"code": "RESOURCE_NOT_FOUND"})
                 return
-            await session.refresh(run, attribute_names=["steps"])
-            if last_state is None:
-                yield _sse("snapshot", RunRead.model_validate(run).model_dump(mode="json"))
-            else:
-                if run.state != last_state:
-                    yield _sse(
-                        "state_changed",
-                        {"state": run.state.value, "version": run.version},
-                    )
-                for step in run.steps:
-                    if step.sequence > last_sequence:
-                        yield _sse(
-                            "step_added",
-                            RunStepRead.model_validate(step).model_dump(mode="json"),
-                        )
-            last_state = run.state
-            last_sequence = max([step.sequence for step in run.steps] + [last_sequence])
+            if last_state is None or run.version != last_version:
+                await session.refresh(run, attribute_names=["steps"])
+                for frame in _diff_frames(run, last_state, last_sequence):
+                    yield frame
+                last_state = run.state
+                last_version = run.version
+                last_sequence = max([step.sequence for step in run.steps] + [last_sequence])
             if is_terminal_state(run.state):
                 log.info(
                     "run_stream_closed",
@@ -510,8 +566,6 @@ async def _run_events(
                     request_id=request_id,
                 )
                 return
-        finally:
-            await session.close()
         if loop.time() - last_beat >= heartbeat_s:
             yield ": ping\n\n"
             last_beat = loop.time()

@@ -7,11 +7,13 @@ run (plus the live stream for updates).
 
 from __future__ import annotations
 
+import asyncio
 import uuid
+from collections.abc import Awaitable, Callable
 from typing import Any
 
 from pydantic import BaseModel, Field
-from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.agents.service import (
     get_analysis,
@@ -46,21 +48,45 @@ class RunDetails(BaseModel):
 
 
 async def get_run_details(session: AsyncSession, run_id: uuid.UUID) -> RunDetails:
-    """Assemble the composite read. Raises :class:`RunNotFoundError`."""
+    """Assemble the composite read. Raises :class:`RunNotFoundError`.
+
+    The eight store reads are independent, so they fan out
+    concurrently (Issue #81). Each read runs in its own short-lived
+    session: ``AsyncSession`` forbids concurrent operations on one
+    session, and the dashboard path is read-only (all rows committed
+    before this is called), so isolated sessions see the same data.
+    """
     run = await service.get_run(session, run_id)
     await session.refresh(run, attribute_names=["steps"])
-    analysis = await get_analysis(session, run_id)
-    plan = await get_plan(session, run_id)
-    implementation = await get_implementation(session, run_id)
-    test_result = await get_test_result(session, run_id)
-    diagnosis = await get_diagnosis(session, run_id)
-    review = await get_review(session, run_id)
-    memory = await get_memory(session, run_id)
+
+    async def _isolated(loader: Callable[[AsyncSession, uuid.UUID], Awaitable[Any]]) -> Any:
+        maker = async_sessionmaker(bind=session.bind, expire_on_commit=False)
+        async with maker() as child:
+            return await loader(child, run_id)
+
+    (
+        analysis,
+        plan,
+        implementation,
+        test_result,
+        diagnosis,
+        review,
+        memory,
+        pull_request,
+    ) = await asyncio.gather(
+        _isolated(get_analysis),
+        _isolated(get_plan),
+        _isolated(get_implementation),
+        _isolated(get_test_result),
+        _isolated(get_diagnosis),
+        _isolated(get_review),
+        _isolated(get_memory),
+        _isolated(get_pull_request),
+    )
     approved_by = next(
         (step.approved_by for step in run.steps if step.event == "plan_approved"),
         None,
     )
-    pull_request = await get_pull_request(session, run_id)
     return RunDetails(
         run=RunRead.model_validate(run),
         analysis=analysis.findings if analysis else None,

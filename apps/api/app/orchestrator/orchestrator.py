@@ -26,8 +26,9 @@ Design invariants
 
 from __future__ import annotations
 
+import contextlib
 import uuid
-from collections.abc import Awaitable, Callable
+from collections.abc import AsyncIterator, Awaitable, Callable
 
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
@@ -140,74 +141,106 @@ class Orchestrator:
         run_id: uuid.UUID,
         request_id: str,
     ) -> None:
-        """Open a session, build context, invoke the agent, apply event.
+        """Snapshot, invoke the agent, apply the returned event.
 
-        The agent's returned event is applied via the same chokepoint
-        the API uses (``transition()``). On any error we apply
-        ``unrecoverable_error`` to mark the Run as FAILED — Phase 1 has
-        no retry semantics. A later issue owns retry/backoff.
+        Sessions are short-lived per phase: one to load the snapshot,
+        then (after the agent returns) one to apply the event. No
+        session is held across ``agent.run()`` — agents do their own
+        I/O (LLM, git, pytest) over minutes and must not pin a pooled
+        DB connection (Issue #81). Agents only ever see the detached
+        snapshot via :class:`AgentContext` (``run_id`` + columns).
 
         After a successful apply, we re-fire ``handle_transition`` so
         the next state gets a chance to schedule its own agent task.
         This keeps the API layer and the orchestrator in sync without
         duplicating the dispatch logic.
         """
+        context = await self._load_snapshot(run_id, request_id)
+        if context is None:
+            return
+        try:
+            next_event = await agent.run(context)
+        except Exception as exc:
+            log.error(
+                "orchestrator_agent_raised",
+                run_id=str(run_id),
+                agent=getattr(agent, "name", agent.__class__.__name__),
+                error_type=type(exc).__name__,
+                error_message=str(exc),
+                exc_info=True,
+                request_id=request_id,
+            )
+            async with self._new_session() as session:
+                await _apply_safely(session, run_id, "unrecoverable_error", request_id)
+            return
+
+        # A plan approval carries its actor for the audit trail
+        # (CONTEXT.md): the policy agent approves as "policy",
+        # anything else defaults to no actor recorded.
+        approved_by: str | None = None
+        if next_event == "plan_approved":
+            approved_by = getattr(agent, "approval_actor", None)
+
+        if next_event is None:
+            log.debug(
+                "orchestrator_agent_returned_none",
+                run_id=str(run_id),
+                agent=getattr(agent, "name", agent.__class__.__name__),
+                request_id=request_id,
+            )
+            return
+
+        # Apply and capture the resulting from->to for the next hook.
+        async with self._new_session() as session:
+            applied = await _apply_and_capture(
+                session, run_id, next_event, request_id, approved_by=approved_by
+            )
+        if applied is not None:
+            record_run_event(event=next_event, approved_by=approved_by)
+            from_state, to_state = applied
+            # Re-fire the hook on the new state. Because
+            # ``handle_transition`` schedules a fresh task (not
+            # recursion), stack depth stays bounded.
+            self.handle_transition(
+                run_id=run_id,
+                from_state=from_state,
+                to_state=to_state,
+                event=next_event,
+                request_id=request_id,
+            )
+
+    @contextlib.asynccontextmanager
+    async def _new_session(self) -> AsyncIterator[AsyncSession]:
+        """Yield a short-lived session for one phase (load or apply)."""
         session = await self._session_factory()
         try:
-            run, steps = await _load_run_and_steps(session, run_id)
-            context = AgentContext(
+            yield session
+        finally:
+            await session.close()
+
+    async def _load_snapshot(self, run_id: uuid.UUID, request_id: str) -> AgentContext | None:
+        """Load the run + steps, detach, and close the session.
+
+        Returns ``None`` when the Run vanished between the API commit
+        and this task running (treated as a no-op).
+        """
+        session = await self._session_factory()
+        try:
+            try:
+                run, steps = await _load_run_and_steps(session, run_id)
+            except RunNotFoundError:
+                # The Run was deleted between the API commit and this
+                # task running. Treat as a no-op: nothing to drive.
+                return None
+            # Close releases the connection AND detaches the snapshot
+            # (``Session.close()`` expunges all ORM objects); the agent
+            # must never touch a live session-bound object. Loaded
+            # column attributes stay readable on the detached objects.
+            return AgentContext(
                 run=run,
                 steps=tuple(steps),
                 request_id=request_id,
             )
-            try:
-                next_event = await agent.run(context)
-            except Exception as exc:
-                log.error(
-                    "orchestrator_agent_raised",
-                    run_id=str(run_id),
-                    agent=getattr(agent, "name", agent.__class__.__name__),
-                    error_type=type(exc).__name__,
-                    error_message=str(exc),
-                    exc_info=True,
-                    request_id=request_id,
-                )
-                await _apply_safely(session, run_id, "unrecoverable_error", request_id)
-                return
-
-            # A plan approval carries its actor for the audit trail
-            # (CONTEXT.md): the policy agent approves as "policy",
-            # anything else defaults to no actor recorded.
-            approved_by: str | None = None
-            if next_event == "plan_approved":
-                approved_by = getattr(agent, "approval_actor", None)
-
-            if next_event is None:
-                log.debug(
-                    "orchestrator_agent_returned_none",
-                    run_id=str(run_id),
-                    agent=getattr(agent, "name", agent.__class__.__name__),
-                    request_id=request_id,
-                )
-                return
-
-            # Apply and capture the resulting from->to for the next hook.
-            applied = await _apply_and_capture(
-                session, run_id, next_event, request_id, approved_by=approved_by
-            )
-            if applied is not None:
-                record_run_event(event=next_event, approved_by=approved_by)
-                from_state, to_state = applied
-                # Re-fire the hook on the new state. Because
-                # ``handle_transition`` schedules a fresh task (not
-                # recursion), stack depth stays bounded.
-                self.handle_transition(
-                    run_id=run_id,
-                    from_state=from_state,
-                    to_state=to_state,
-                    event=next_event,
-                    request_id=request_id,
-                )
         finally:
             await session.close()
 
