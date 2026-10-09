@@ -1,4 +1,4 @@
--- 00010_user_github_auth.sql
+-- 0010_user_github_auth.sql
 --
 -- GitHub identity + encrypted OAuth token on users (Phase 4, Issue #015).
 --

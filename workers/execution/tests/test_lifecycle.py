@@ -75,3 +75,73 @@ def test_worker_settings_default_to_development() -> None:
     worker = Worker()
     assert worker.settings.environment == "development"
     assert worker.settings.log_level == "INFO"
+
+
+class _QuietLog:
+    """No-op logger: keeps reap tests independent of logging config."""
+
+    def info(self, *args: object, **kwargs: object) -> None:
+        pass
+
+    def warning(self, *args: object, **kwargs: object) -> None:
+        pass
+
+
+@pytest.mark.asyncio
+async def test_reap_removes_only_orphan_run_containers(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Issue #84: startup reaping targets crash leftovers, never the worker."""
+    import sys
+
+    from forge_worker import main as main_mod
+
+    removed: list[str] = []
+
+    class _FakeContainer:
+        def __init__(self, name: str) -> None:
+            self.name = name
+
+        def remove(self, *, force: bool = False) -> None:
+            removed.append(self.name)
+
+    class _FakeContainers:
+        def list(self, *, all: bool = False) -> list[_FakeContainer]:
+            return [
+                _FakeContainer("forge-12345678-1234-1234-1234-1234567890ab-0001"),
+                _FakeContainer("forge-worker"),
+                _FakeContainer("forge-prod-worker"),
+                _FakeContainer("postgres"),
+                _FakeContainer("forge-short"),
+            ]
+
+    class _FakeClient:
+        containers = _FakeContainers()
+
+    class _FakeDocker:
+        @staticmethod
+        def from_env(*args: object, **kwargs: object) -> _FakeClient:
+            return _FakeClient()
+
+    monkeypatch.setitem(sys.modules, "docker", _FakeDocker())
+    # Hermetic logging: earlier lifecycle tests drive configure_logging
+    # under capsys, which closes the captured stdout handle.
+    monkeypatch.setattr(main_mod, "log", _QuietLog())
+    assert await main_mod._reap_stale_sandbox_containers() == 1
+    assert removed == ["forge-12345678-1234-1234-1234-1234567890ab-0001"]
+
+
+@pytest.mark.asyncio
+async def test_reap_returns_zero_without_daemon(monkeypatch: pytest.MonkeyPatch) -> None:
+    import sys
+
+    from forge_worker import main as main_mod
+
+    class _BoomDocker:
+        @staticmethod
+        def from_env(*args: object, **kwargs: object) -> None:
+            raise RuntimeError("no daemon")
+
+    monkeypatch.setitem(sys.modules, "docker", _BoomDocker())
+    monkeypatch.setattr(main_mod, "log", _QuietLog())
+    assert await main_mod._reap_stale_sandbox_containers() == 0

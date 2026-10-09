@@ -18,9 +18,10 @@ This directory holds versioned SQL migrations applied by Alembic.
 ## Workflow
 
 Alembic orchestrates the migration metadata, but the actual schema is
-written by hand in these SQL files. The migration helper script
-(`scripts/migrate.sh`) executes the SQL files in order and records the
-applied versions in `alembic_version`.
+written by hand in these SQL files. Each Alembic version executes its
+SQL file (`scripts/migrate.sh` is a thin wrapper over
+`alembic upgrade head`); applied versions are recorded in
+`alembic_version`.
 
 A new migration must:
 
