@@ -62,10 +62,12 @@ export default async function Home({ searchParams }: HomePageProps) {
     );
   }
 
-  const [projects, listing] = await Promise.all([
-    client.listProjects().catch(() => null),
-    client.listRuns(20, 0).catch(() => null),
-  ]);
+  const projects = await client.listProjects().catch(() => null);
+  // Project-scoped run list (Issue #83): `?project=<id>` filters;
+  // unknown ids fall back to unfiltered rather than erroring.
+  const wanted = typeof searchParams.project === "string" ? searchParams.project : "";
+  const selected = (projects ?? []).find((project) => project.id === wanted) ?? null;
+  const listing = await client.listRuns(20, 0, selected?.id).catch(() => null);
 
   return (
     <main className="dashboard">
@@ -91,6 +93,22 @@ export default async function Home({ searchParams }: HomePageProps) {
 
       <section className="panel runs">
         <h2>Runs{listing ? ` (${listing.total})` : ""}</h2>
+        {(projects ?? []).length > 1 ? (
+          <nav className="project-filter" aria-label="Filter runs by project">
+            <Link href="/" aria-current={selected === null ? "page" : undefined}>
+              All projects
+            </Link>
+            {(projects ?? []).map((project) => (
+              <Link
+                key={project.id}
+                href={`/?project=${encodeURIComponent(project.id)}`}
+                aria-current={selected?.id === project.id ? "page" : undefined}
+              >
+                {project.name}
+              </Link>
+            ))}
+          </nav>
+        ) : null}
         {!listing ? (
           <p className="muted">Could not load runs from the API.</p>
         ) : listing.runs.length === 0 ? (

@@ -147,3 +147,24 @@ describe("RunLive", () => {
     });
   });
 });
+
+describe("mergeStep", () => {
+  it("appends unseen steps and ignores re-delivered ids", async () => {
+    const { mergeStep } = await import("@/components/RunLive");
+    const base = detailsFixture().run.steps;
+    const fresh = {
+      id: "s9",
+      sequence: 9,
+      from_state: "TESTING",
+      event: "tests_passed",
+      approved_by: null,
+      to_state: "REVIEWING",
+      created_at: "2026-09-12T00:06:00Z",
+    } as const;
+    const appended = mergeStep(base, { ...fresh });
+    expect(appended).toHaveLength(base.length + 1);
+    // A step_added followed by a state_changed refresh must not double-add.
+    expect(mergeStep(appended, { ...fresh })).toHaveLength(base.length + 1);
+    expect(mergeStep(appended, { ...base[0] })).toHaveLength(base.length + 1);
+  });
+});

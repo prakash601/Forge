@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 
 import { createApiClient } from "@/lib/api";
 
@@ -16,10 +16,11 @@ import { createApiClient } from "@/lib/api";
  */
 export function LoginButton({ apiBaseUrl }: { apiBaseUrl: string }) {
   // Client-only href (SSR renders "/" to avoid a hydration mismatch).
-  const [href, setHref] = useState(createApiClient(apiBaseUrl).loginUrl("/"));
+  const client = useMemo(() => createApiClient(apiBaseUrl), [apiBaseUrl]);
+  const [href, setHref] = useState(client.loginUrl("/"));
   useEffect(() => {
-    setHref(createApiClient(apiBaseUrl).loginUrl(`${window.location.origin}/`));
-  }, [apiBaseUrl]);
+    setHref(client.loginUrl(`${window.location.origin}/`));
+  }, [client]);
 
   return (
     <a className="btn primary" href={href}>
@@ -32,6 +33,7 @@ export function DevLoginForm({ apiBaseUrl }: { apiBaseUrl: string }) {
   const [email, setEmail] = useState("dev@local.test");
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const client = useMemo(() => createApiClient(apiBaseUrl), [apiBaseUrl]);
 
   const submit = async (event: React.FormEvent) => {
     event.preventDefault();
@@ -40,7 +42,7 @@ export function DevLoginForm({ apiBaseUrl }: { apiBaseUrl: string }) {
     setPending(true);
     setError(null);
     try {
-      await createApiClient(apiBaseUrl).devLogin(trimmed);
+      await client.devLogin(trimmed);
       window.location.reload();
     } catch (cause) {
       setError(

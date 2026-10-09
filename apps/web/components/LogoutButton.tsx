@@ -1,7 +1,7 @@
 "use client";
 
 import { useRouter } from "next/navigation";
-import { useState } from "react";
+import { useMemo, useState } from "react";
 
 import { createApiClient } from "@/lib/api";
 
@@ -18,11 +18,12 @@ export function LogoutButton({
 }) {
   const router = useRouter();
   const [pending, setPending] = useState(false);
+  const client = useMemo(() => createApiClient(apiBaseUrl), [apiBaseUrl]);
 
   const logout = async () => {
     setPending(true);
     try {
-      await createApiClient(apiBaseUrl).logout();
+      await client.logout();
     } catch {
       // Clearing failed server-side; still leave the gated UI.
     } finally {
