@@ -9,6 +9,14 @@
 
 import { createApiClient, type Run, type RunState, type RunStep } from "./api";
 
+// States after which the server closes the stream on purpose — a
+// transport error then is the expected goodbye, not a failure.
+const TERMINAL_STATES: ReadonlySet<RunState> = new Set([
+  "COMPLETED",
+  "FAILED",
+  "CANCELLED",
+]);
+
 export interface RunStreamHandlers {
   onSnapshot?: (run: Run) => void;
   onStateChanged?: (state: RunState, version: number) => void;
@@ -54,6 +62,7 @@ function startEventStream(
   pollIntervalMs: number,
 ): () => void {
   let settled = false;
+  let terminal = false;
   // withCredentials carries the session cookie cross-origin (Issue #022).
   const source = new factory(
     `${baseUrl}/api/v1/runs/${encodeURIComponent(runId)}/stream`,
@@ -75,6 +84,7 @@ function startEventStream(
           handlers.onSnapshot?.(data as Run);
         } else if (type === "state_changed") {
           const { state, version } = data as { state: RunState; version: number };
+          terminal = TERMINAL_STATES.has(state);
           handlers.onStateChanged?.(state, version);
         } else {
           handlers.onStepAdded?.(data as RunStep);
@@ -88,20 +98,25 @@ function startEventStream(
   source.addEventListener("snapshot", onMessage("snapshot") as EventListener);
   source.addEventListener("state_changed", onMessage("state_changed") as EventListener);
   source.addEventListener("step_added", onMessage("step_added") as EventListener);
-  source.addEventListener("error", (() => {
-    handlers.onError?.("stream error payload");
-  }) as EventListener);
 
   let fallback: (() => void) | null = null;
   source.onerror = () => {
     // If the stream died before delivering anything, poll instead of
     // leaving the UI frozen. A mid-stream error just closes: the UI
-    // already has data and the next navigation refetches.
+    // already has data and the next navigation refetches — except when
+    // the run is still live, which is a real interruption worth
+    // surfacing (a terminal close is the expected goodbye, silent).
+    // NOTE: no "error" event listener: the browser fires it on every
+    // close (including clean ones), which used to raise a spurious
+    // banner on completed runs (Issue #83).
     if (!settled) {
       source.close();
       fallback = startPolling(baseUrl, runId, handlers, pollIntervalMs);
     } else {
       source.close();
+      if (!terminal) {
+        handlers.onError?.("Live updates interrupted before the run finished.");
+      }
     }
   };
 

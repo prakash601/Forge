@@ -1,7 +1,7 @@
 "use client";
 
 import { useRouter } from "next/navigation";
-import { useState } from "react";
+import { useMemo, useState } from "react";
 
 import { createApiClient, type Project } from "@/lib/api";
 import { SessionExpired, isUnauthorized } from "@/components/SessionExpired";
@@ -27,6 +27,7 @@ export function NewRunForm({ apiBaseUrl, projects: initial }: NewRunFormProps) {
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [unauthorized, setUnauthorized] = useState(false);
+  const client = useMemo(() => createApiClient(apiBaseUrl), [apiBaseUrl]);
 
   const submittable = task.trim().length > 0 && projectId !== "" && !pending;
 
@@ -40,7 +41,7 @@ export function NewRunForm({ apiBaseUrl, projects: initial }: NewRunFormProps) {
     setError(null);
     setUnauthorized(false);
     try {
-      const run = await createApiClient(apiBaseUrl).createRun(trimmed, projectId);
+      const run = await client.createRun(trimmed, projectId);
       router.push(`/runs/${run.id}`);
     } catch (cause) {
       if (isUnauthorized(cause)) {
@@ -62,7 +63,7 @@ export function NewRunForm({ apiBaseUrl, projects: initial }: NewRunFormProps) {
     setError(null);
     setUnauthorized(false);
     try {
-      const project = await createApiClient(apiBaseUrl).createProject(name);
+      const project = await client.createProject(name);
       setProjects((prev) => [...prev, project]);
       setProjectId(project.id);
       setNewName("");

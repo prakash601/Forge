@@ -1,12 +1,12 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 
 import {
   createApiClient,
-  type JsonRecord,
   type RunDetails,
   type RunState,
+  type RunStep,
 } from "@/lib/api";
 import { InterventionPanel } from "./InterventionPanel";
 import { PlanApproval } from "./PlanApproval";
@@ -37,6 +37,10 @@ function list(value: unknown): string[] {
   return Array.isArray(value) ? value.filter((v): v is string => typeof v === "string") : [];
 }
 
+function num(value: unknown): number | null {
+  return typeof value === "number" && Number.isFinite(value) ? value : null;
+}
+
 function Section({ title, children }: { title: string; children: React.ReactNode }) {
   return (
     <section className="panel">
@@ -46,7 +50,7 @@ function Section({ title, children }: { title: string; children: React.ReactNode
   );
 }
 
-function RawJson({ value }: { value: JsonRecord }) {
+function RawJson({ value }: { value: unknown }) {
   return (
     <details className="raw">
       <summary>Raw JSON</summary>
@@ -102,9 +106,9 @@ export function RunDetail({
 
       {details.analysis ? (
         <Section title="Analysis">
-          <p>{str(details.analysis["summary"])}</p>
+          <p>{str(details.analysis.summary)}</p>
           <p className="muted">
-            Relevant files: {list(details.analysis["relevant_files"]).join(", ") || "—"}
+            Relevant files: {list(details.analysis.relevant_files).join(", ") || "—"}
           </p>
           <RawJson value={details.analysis} />
         </Section>
@@ -112,8 +116,8 @@ export function RunDetail({
 
       {details.plan ? (
         <Section title="Plan">
-          <p>{str(details.plan["goal"])}</p>
-          <p className="muted">{str(details.plan["approach"])}</p>
+          <p>{str(details.plan.goal)}</p>
+          <p className="muted">{str(details.plan.approach)}</p>
           {approval}
           <RawJson value={details.plan} />
         </Section>
@@ -121,9 +125,9 @@ export function RunDetail({
 
       {details.implementation ? (
         <Section title="Implementation">
-          <p>{str(details.implementation["summary"])}</p>
+          <p>{str(details.implementation.summary)}</p>
           <p className="muted">
-            Changed: {list(details.implementation["files_changed"]).join(", ") || "—"}
+            Changed: {list(details.implementation.files_changed).join(", ") || "—"}
           </p>
           <RawJson value={details.implementation} />
         </Section>
@@ -132,7 +136,7 @@ export function RunDetail({
       {details.test_result ? (
         <Section title="Tests">
           <p>
-            {`${str(details.test_result["status"]) ?? "?"} · ${Number(details.test_result["passed"] ?? 0)} passed · ${Number(details.test_result["failed"] ?? 0)} failed`}
+            {`${str(details.test_result.status) ?? "?"} · ${num(details.test_result.passed) ?? 0} passed · ${num(details.test_result.failed) ?? 0} failed`}
           </p>
           <RawJson value={details.test_result} />
         </Section>
@@ -141,7 +145,7 @@ export function RunDetail({
       {details.review ? (
         <Section title="Review">
           <p>
-            {str(details.review["decision"])} — {str(details.review["summary"])}
+            {str(details.review.decision)} — {str(details.review.summary)}
           </p>
           <RawJson value={details.review} />
         </Section>
@@ -149,7 +153,7 @@ export function RunDetail({
 
       {details.diagnosis ? (
         <Section title="Diagnosis">
-          <p>{str(details.diagnosis["root_cause"])}</p>
+          <p>{str(details.diagnosis.root_cause)}</p>
           <RawJson value={details.diagnosis} />
         </Section>
       ) : null}
@@ -159,8 +163,8 @@ export function RunDetail({
           <ul className="memory">
             {details.memory_candidates.map((candidate, index) => (
               <li key={index}>
-                <span className="muted">{str(candidate["memory_type"])}:</span>{" "}
-                {str(candidate["content"])}
+                <span className="muted">{str(candidate.memory_type)}:</span>{" "}
+                {str(candidate.content)}
               </li>
             ))}
           </ul>
@@ -168,6 +172,15 @@ export function RunDetail({
       ) : null}
     </div>
   );
+}
+
+export function mergeStep(steps: RunStep[], step: RunStep): RunStep[] {
+  // A step_added followed by a state_changed refresh (full list) would
+  // otherwise record the step twice (Issue #83).
+  if (steps.some((seen) => seen.id === step.id)) {
+    return steps;
+  }
+  return [...steps, step];
 }
 
 export interface RunLiveProps {
@@ -180,9 +193,10 @@ export interface RunLiveProps {
 export function RunLive({ apiBaseUrl, runId, initial, pollIntervalMs }: RunLiveProps) {
   const [details, setDetails] = useState<RunDetails>(initial);
   const [streamError, setStreamError] = useState<string | null>(null);
+  const client = useMemo(() => createApiClient(apiBaseUrl), [apiBaseUrl]);
 
   const refresh = useCallback(() => {
-    createApiClient(apiBaseUrl)
+    client
       .getRunDetails(runId)
       .then((next) => {
         setDetails(next);
@@ -191,32 +205,39 @@ export function RunLive({ apiBaseUrl, runId, initial, pollIntervalMs }: RunLiveP
       .catch(() => {
         // A failed refetch leaves the last known state on screen.
       });
-  }, [apiBaseUrl, runId]);
+  }, [client, runId]);
+
+  const appendStep = useCallback((step: RunStep) => {
+    setDetails((prev) => ({
+      ...prev,
+      run: { ...prev.run, steps: mergeStep(prev.run.steps, step) },
+    }));
+  }, []);
 
   useEffect(() => {
     const options = pollIntervalMs === undefined ? {} : { pollIntervalMs };
     return subscribeToRun(apiBaseUrl, runId, {
+      onSnapshot: (run) => {
+        // Authoritative reset: replaces any optimistically appended steps.
+        setDetails((prev) => ({ ...prev, run }));
+        setStreamError(null);
+      },
       onStateChanged: () => {
         refresh();
       },
-      onStepAdded: (step) => {
-        setDetails((prev) => ({
-          ...prev,
-          run: { ...prev.run, steps: [...prev.run.steps, step] },
-        }));
-      },
+      onStepAdded: appendStep,
       onError: (message) => {
         setStreamError(message);
       },
     }, options);
-  }, [apiBaseUrl, runId, pollIntervalMs, refresh]);
+  }, [apiBaseUrl, runId, pollIntervalMs, refresh, appendStep]);
 
   return (
     <>
       {streamError ? (
         <p role="alert" className="error">
           Live updates interrupted: {streamError}. If your session expired,{" "}
-          <a href={createApiClient(apiBaseUrl).loginUrl("/")}>log in again</a>.
+          <a href={client.loginUrl("/")}>log in again</a>.
         </p>
       ) : null}
       <RunDetail

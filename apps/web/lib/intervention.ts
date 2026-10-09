@@ -19,6 +19,10 @@ function str(value: unknown): string | null {
   return typeof value === "string" ? value : null;
 }
 
+function num(value: unknown): number | null {
+  return typeof value === "number" && Number.isFinite(value) ? value : null;
+}
+
 export function describeIntervention(details: RunDetails): InterventionInfo | null {
   const { run } = details;
   if (run.state !== "NEEDS_HUMAN" && run.state !== "FAILED") {
@@ -26,15 +30,15 @@ export function describeIntervention(details: RunDetails): InterventionInfo | nu
   }
 
   const debugAttempts = run.steps.filter((step) => step.to_state === "DEBUGGING").length;
-  const failed = Number(details.test_result?.["failed"] ?? 0);
-  const passed = Number(details.test_result?.["passed"] ?? 0);
+  const failed = num(details.test_result?.failed) ?? 0;
+  const passed = num(details.test_result?.passed) ?? 0;
   const lastTests =
     details.test_result === null
       ? null
-      : `${str(details.test_result["status"]) ?? "?"} · ${passed} passed · ${failed} failed`;
+      : `${str(details.test_result.status) ?? "?"} · ${passed} passed · ${failed} failed`;
 
-  const reviewDecision = str(details.review?.["decision"]);
-  const reviewSummary = str(details.review?.["summary"]);
+  const reviewDecision = str(details.review?.decision);
+  const reviewSummary = str(details.review?.summary);
   const lastStep = run.steps[run.steps.length - 1];
 
   let reason: string;

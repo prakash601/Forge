@@ -174,4 +174,33 @@ describe("subscribeToRun EventSource path", () => {
     );
     unsubscribe();
   });
+
+  it("stays silent when the server closes after a terminal state", () => {
+    const errors: string[] = [];
+    const unsubscribe = subscribeToRun("http://api", "run-9", {
+      onStateChanged: () => {},
+      onError: (message) => errors.push(message),
+    });
+    const source = FakeEventSource.instances[0];
+    source.emit("snapshot", runFixture({ state: "COMPLETED" }));
+    source.emit("state_changed", { state: "COMPLETED", version: 3 });
+    source.fail();
+    expect(errors).toEqual([]);
+    expect(source.closed).toBe(true);
+    unsubscribe();
+  });
+
+  it("banners a mid-stream failure while the run is still live", () => {
+    const errors: string[] = [];
+    const unsubscribe = subscribeToRun("http://api", "run-9", {
+      onStateChanged: () => {},
+      onError: (message) => errors.push(message),
+    });
+    const source = FakeEventSource.instances[0];
+    source.emit("snapshot", runFixture({ state: "ANALYZING" }));
+    source.fail();
+    expect(errors).toEqual(["Live updates interrupted before the run finished."]);
+    expect(source.closed).toBe(true);
+    unsubscribe();
+  });
 });

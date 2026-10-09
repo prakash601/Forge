@@ -411,8 +411,28 @@ async def list_runs_endpoint(
     current_user: Annotated[User, Depends(get_current_user)],
     limit: Annotated[int, Query(ge=1, le=100)] = 20,
     offset: Annotated[int, Query(ge=0)] = 0,
+    project_id: Annotated[
+        uuid.UUID | None, Query(description="Filter to one owned project.")
+    ] = None,
 ) -> RunList:
-    project_ids = await list_owned_project_ids(session, current_user.id)
+    request_id: str = request.state.request_id
+    if project_id is not None:
+        # Ownership-checked: foreign or missing projects are 404 (#016).
+        try:
+            project = await get_owned_project(session, project_id, current_user.id)
+        except ProjectNotFoundError as exc:
+            await session.rollback()
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail={
+                    "code": "RESOURCE_NOT_FOUND",
+                    "message": str(exc),
+                    "request_id": request_id,
+                },
+            ) from exc
+        project_ids = [project.id]
+    else:
+        project_ids = await list_owned_project_ids(session, current_user.id)
     runs, total = await service.list_runs(
         session, limit=limit, offset=offset, project_ids=project_ids
     )

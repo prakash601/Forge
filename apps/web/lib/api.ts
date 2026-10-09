@@ -95,17 +95,55 @@ export interface RunListResponse {
 
 export type JsonRecord = Record<string, unknown>;
 
+/** Agent-produced sections: known fields the UI reads, all optional. */
+export interface AnalysisSection {
+  summary?: string;
+  relevant_files?: string[];
+}
+export interface PlanSection {
+  goal?: string;
+  approach?: string;
+}
+export interface ImplementationSection {
+  summary?: string;
+  files_changed?: string[];
+}
+export interface TestResultSection {
+  status?: string;
+  passed?: number;
+  failed?: number;
+}
+export interface ReviewSection {
+  decision?: string;
+  summary?: string;
+}
+export interface DiagnosisSection {
+  root_cause?: string;
+}
+export interface MemoryCandidate {
+  memory_type?: string;
+  content?: string;
+}
+export interface PullRequestRecord {
+  pr_number?: number;
+  pr_url?: string;
+  head_branch?: string;
+  base_commit?: string;
+  status?: string;
+  error?: string | null;
+}
+
 export interface RunDetails {
   run: Run;
-  analysis: JsonRecord | null;
-  plan: JsonRecord | null;
-  implementation: JsonRecord | null;
-  test_result: JsonRecord | null;
-  diagnosis: JsonRecord | null;
-  review: JsonRecord | null;
-  memory_candidates: JsonRecord[];
+  analysis: AnalysisSection | null;
+  plan: PlanSection | null;
+  implementation: ImplementationSection | null;
+  test_result: TestResultSection | null;
+  diagnosis: DiagnosisSection | null;
+  review: ReviewSection | null;
+  memory_candidates: MemoryCandidate[];
   approved_by: string | null;
-  pull_request?: JsonRecord | null;
+  pull_request?: PullRequestRecord | null;
 }
 
 export interface ApiClientOptions {
@@ -123,7 +161,7 @@ export interface ApiClient {
   loginUrl(next: string): string;
   listProjects(): Promise<Project[]>;
   createProject(name: string): Promise<Project>;
-  listRuns(limit?: number, offset?: number): Promise<RunListResponse>;
+  listRuns(limit?: number, offset?: number, projectId?: string): Promise<RunListResponse>;
   getRun(runId: string): Promise<Run>;
   getRunDetails(runId: string): Promise<RunDetails>;
   applyEvent(runId: string, event: "plan_approved" | "plan_rejected"): Promise<Run>;
@@ -191,10 +229,11 @@ export function createApiClient(baseUrl: string, options: ApiClientOptions = {})
       `${trimmed}/api/v1/auth/github/login?next=${encodeURIComponent(next)}`,
     listProjects: () => get<Project[]>("/api/v1/projects?limit=200"),
     createProject: (name: string) => post<Project>("/api/v1/projects", { name }),
-    listRuns: (limit = 20, offset = 0) =>
-      get<RunListResponse>(
-        `/api/v1/runs?limit=${encodeURIComponent(String(limit))}&offset=${encodeURIComponent(String(offset))}`,
-      ),
+    listRuns: (limit = 20, offset = 0, projectId?: string) => {
+      const params = `limit=${encodeURIComponent(String(limit))}&offset=${encodeURIComponent(String(offset))}`;
+      const scope = projectId ? `&project_id=${encodeURIComponent(projectId)}` : "";
+      return get<RunListResponse>(`/api/v1/runs?${params}${scope}`);
+    },
     getRun: (runId: string) => get<Run>(`/api/v1/runs/${encodeURIComponent(runId)}`),
     getRunDetails: (runId: string) =>
       get<RunDetails>(`/api/v1/runs/${encodeURIComponent(runId)}/details`),

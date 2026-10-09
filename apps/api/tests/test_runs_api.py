@@ -166,3 +166,28 @@ async def test_get_run_with_malformed_uuid_returns_422(
     # FastAPI's path validation produces 422 for unparseable UUIDs.
     response = await authed_client.get(f"/api/v1/runs/{bad_uuid}")
     assert response.status_code == 422
+
+
+async def test_list_runs_filters_by_project(authed_client: AsyncClient) -> None:
+    """Issue #83: ?project_id= scopes the dashboard list (404 if foreign)."""
+    import uuid as _uuid
+
+    project_a = await ensure_project(authed_client, name="proj-a")
+    project_b = await ensure_project(authed_client, name="proj-b")
+    for task, project_id in (
+        ("a1", project_a["id"]),
+        ("a2", project_a["id"]),
+        ("b1", project_b["id"]),
+    ):
+        created = await authed_client.post(
+            "/api/v1/runs", json={"task": task, "project_id": project_id}
+        )
+        assert created.status_code == 201, created.text
+    scoped = await authed_client.get(f"/api/v1/runs?project_id={project_a['id']}")
+    assert scoped.status_code == 200, scoped.text
+    body = scoped.json()
+    assert body["total"] == 2
+    assert {run["task"] for run in body["runs"]} == {"a1", "a2"}
+    missing = await authed_client.get(f"/api/v1/runs?project_id={_uuid.uuid4()}")
+    assert missing.status_code == 404
+    assert missing.json()["error"]["code"] == "RESOURCE_NOT_FOUND"

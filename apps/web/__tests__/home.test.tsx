@@ -178,3 +178,49 @@ describe("Home page (rendered via async server-component helper)", () => {
     );
   });
 });
+
+describe("Home page project filter", () => {
+  const originalFetch = global.fetch;
+  const ME = { id: "user-1", email: "dev@example.com" };
+  const PROJECTS = [
+    { id: "p1", name: "Alpha" },
+    { id: "p2", name: "Beta" },
+  ];
+
+  afterEach(() => {
+    global.fetch = originalFetch;
+    vi.resetModules();
+  });
+
+  it("passes the selected project to the runs list", async () => {
+    const seen: string[] = [];
+    global.fetch = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      seen.push(url);
+      if (url.endsWith("/ready")) {
+        return new Response(JSON.stringify({ status: "ok", version: "0.1.0" }), {
+          status: 200,
+        });
+      }
+      if (url.endsWith("/api/v1/auth/me")) {
+        return new Response(JSON.stringify(ME), { status: 200 });
+      }
+      if (url.includes("/api/v1/projects")) {
+        return new Response(JSON.stringify(PROJECTS), { status: 200 });
+      }
+      if (url.includes("/api/v1/runs")) {
+        return new Response(JSON.stringify({ runs: [], total: 0 }), { status: 200 });
+      }
+      throw new Error(`unexpected fetch: ${url}`);
+    });
+    const { default: Home } = await import("@/app/page");
+    await renderResolved(Home({ searchParams: { project: "p1" } }));
+
+    await waitFor(() => {
+      expect(seen.some((url) => url.includes("project_id=p1"))).toBe(true);
+    });
+    expect(screen.getByText("All projects")).toBeInTheDocument();
+    const filter = screen.getByLabelText("Filter runs by project");
+    expect(filter.querySelector('a[href="/?project=p1"]')).toHaveTextContent("Alpha");
+  });
+});

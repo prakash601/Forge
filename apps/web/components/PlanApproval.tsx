@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useMemo, useState } from "react";
 
 import { createApiClient, type RunState } from "@/lib/api";
 import { SessionExpired, isUnauthorized } from "@/components/SessionExpired";
@@ -25,6 +25,7 @@ export function PlanApproval({ apiBaseUrl, runId, state, onChanged }: PlanApprov
   const [pending, setPending] = useState<ApprovalEvent | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [unauthorized, setUnauthorized] = useState(false);
+  const client = useMemo(() => createApiClient(apiBaseUrl), [apiBaseUrl]);
 
   if (state !== "AWAITING_APPROVAL") {
     return null;
@@ -35,7 +36,7 @@ export function PlanApproval({ apiBaseUrl, runId, state, onChanged }: PlanApprov
     setError(null);
     setUnauthorized(false);
     try {
-      await createApiClient(apiBaseUrl).applyEvent(runId, event);
+      await client.applyEvent(runId, event);
       onChanged();
     } catch (cause) {
       if (isUnauthorized(cause)) {
