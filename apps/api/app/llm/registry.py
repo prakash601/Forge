@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
+
 import httpx
 
+from app.core.providers import pick_provider
 from app.llm.fake import FakeLLMProvider
 from app.llm.openai_provider import OpenAILLMProvider
 from app.llm.protocols import LLMProvider
@@ -30,20 +33,17 @@ def get_llm_provider(
     Raises:
         ValueError: unknown provider name.
     """
-    normalized = provider_name.strip().lower()
-    if normalized == "fake":
-        return FakeLLMProvider()
-    if normalized == "openai":
-        return OpenAILLMProvider(
+    builders: dict[str, Callable[[], LLMProvider]] = {
+        "fake": FakeLLMProvider,
+        "openai": lambda: OpenAILLMProvider(
             api_key=api_key,
             model=model,
             max_output_tokens=max_output_tokens,
             timeout_seconds=timeout_seconds,
             client=client,
             base_url=base_url,
-        )
-    if normalized == "opencode":
-        return OpenAILLMProvider(
+        ),
+        "opencode": lambda: OpenAILLMProvider(
             api_key=api_key,
             model=model,
             max_output_tokens=max_output_tokens,
@@ -51,8 +51,9 @@ def get_llm_provider(
             client=client,
             base_url=base_url or OpenAILLMProvider.OPENCODE_BASE_URL,
             name="opencode",
-        )
-    raise ValueError(f"unknown LLM provider: {provider_name!r}")
+        ),
+    }
+    return pick_provider(provider_name, "LLM", builders)
 
 
 __all__ = ["get_llm_provider"]

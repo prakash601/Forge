@@ -21,10 +21,15 @@ from app import __version__
 from app.api.health import router as health_router
 from app.api.metrics import router as metrics_router
 from app.api.v1 import router as api_v1_router
-from app.config import Settings, get_settings
+from app.config import Settings, get_settings, unknown_forge_env_vars
 from app.core.errors import install_exception_handlers
 from app.core.logging import configure_logging, get_logger
-from app.db.session import dispose_engine, get_session_factory, init_engine
+from app.db.session import (
+    as_async_session_factory,
+    dispose_engine,
+    get_session_factory,
+    init_engine,
+)
 from app.memory.embeddings.registry import get_provider
 from app.metrics.middleware import metrics_middleware
 from app.orchestrator import Orchestrator, StateAgentRegistry
@@ -82,6 +87,8 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     """
     settings: Settings = app.state.settings
     configure_logging(settings)
+    for unknown in unknown_forge_env_vars():
+        log.warning("unknown_forge_env_var", name=unknown)
     _reject_example_secrets(settings)
     init_engine(settings)
     factory = get_session_factory()
@@ -94,14 +101,39 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         from app.agents.archaeologist import ArchaeologistAgent
         from app.agents.debugger import DebuggerAgent
         from app.agents.developer import DeveloperAgent
+        from app.agents.persistence import (
+            load_diagnosis,
+            load_findings,
+            load_memory_lines,
+            load_plan,
+            load_test_report,
+            save_analysis_record,
+            save_diagnosis_record,
+            save_implementation_record,
+            save_memory_record,
+            save_plan_record,
+            save_review_record,
+            save_test_result_record,
+        )
         from app.agents.planner import PlannerAgent
         from app.agents.reviewer import ReviewerAgent
-        from app.agents.service import (
-            get_analysis,
-            get_plan,
-            save_analysis,
-            save_implementation,
-            save_plan,
+        from app.agents.schemas import (
+            ArchaeologistFindings as _Findings,
+        )
+        from app.agents.schemas import (
+            DebuggerDiagnosis as _Diagnosis,
+        )
+        from app.agents.schemas import (
+            DeveloperResult as _Result,
+        )
+        from app.agents.schemas import (
+            Plan as _Plan,
+        )
+        from app.agents.schemas import (
+            ReviewDecision as _Decision,
+        )
+        from app.agents.schemas import (
+            TestReport as _Report,
         )
         from app.agents.tester import TesterAgent
         from app.agents.workspace import WorkspaceManager
@@ -122,75 +154,18 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         async def _save_analysis(
             *, run_id: object, findings: object, provider: str, model: str
         ) -> None:
-            import uuid as _uuid
-
-            from app.agents.schemas import ArchaeologistFindings as _Findings
-
-            _rid = run_id if isinstance(run_id, _uuid.UUID) else _uuid.UUID(str(run_id))
+            assert isinstance(run_id, (uuid.UUID, str))
             assert isinstance(findings, _Findings)
-            session = factory()
-            try:
-                await save_analysis(
-                    session, run_id=_rid, findings=findings, provider=provider, model=model
-                )
-                await session.commit()
-            except Exception:
-                await session.rollback()
-                raise
-            finally:
-                await session.close()
+            await save_analysis_record(
+                factory, run_id=run_id, findings=findings, provider=provider, model=model
+            )
 
         async def _load_memory(run_id: uuid.UUID | None = None) -> list[str]:
-            from app.agents.service import get_latest_memory
-            from app.memory.service import search_similar_memories
-            from app.runs.service import get_run
-
-            session = factory()
+            provider = getattr(app.state, "embedding_provider", None)
             try:
-                # Fail closed: without a run (or a project on it) there
-                # is no memory — a global fallback would leak one
-                # owner's outcomes into another's archaeology (#016).
-                if run_id is None:
-                    return []
-                try:
-                    run = await get_run(session, run_id)
-                except Exception:
-                    return []
-                if run.project_id is None:
-                    return []
-                lines: list[str] = []
-                row = await get_latest_memory(session, project_id=run.project_id)
-                if row is not None:
-                    lines.extend(
-                        f"{c.get('memory_type', 'NOTE')}: {c.get('content', '')}"
-                        for c in row.candidates
-                        if isinstance(c, dict)
-                    )
-                # Vector recall: nearest ACTIVE memories to the task
-                # text, so old but relevant learnings surface even when
-                # they are not the latest. Same per-project scoping;
-                # any failure degrades to latest-memory lines only.
-                try:
-                    provider = getattr(app.state, "embedding_provider", None)
-                    if provider is not None and run.task.strip():
-                        query = await provider.embed(run.task)
-                        similar = await search_similar_memories(
-                            session,
-                            project_id=run.project_id,
-                            query_embedding=query,
-                            limit=5,
-                        )
-                        for item in similar:
-                            line = f"{item.memory_type}: {item.content}"
-                            if line not in lines:
-                                lines.append(line)
-                except Exception:
-                    log.warning("memory_vector_recall_failed", run_id=str(run_id))
-                return lines
+                return await load_memory_lines(factory, provider, run_id=run_id)
             except Exception:
                 return []
-            finally:
-                await session.close()
 
         _archaeologist = ArchaeologistAgent(
             llm=_llm,
@@ -204,36 +179,15 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         app.state.llm_provider = _llm
 
         async def _save_plan(*, run_id: object, plan: object, provider: str, model: str) -> None:
-            import uuid as _uuid
-
-            from app.agents.schemas import Plan as _Plan
-
-            _rid = run_id if isinstance(run_id, _uuid.UUID) else _uuid.UUID(str(run_id))
+            assert isinstance(run_id, (uuid.UUID, str))
             assert isinstance(plan, _Plan)
-            session = factory()
-            try:
-                await save_plan(session, run_id=_rid, plan=plan, provider=provider, model=model)
-                await session.commit()
-            except Exception:
-                await session.rollback()
-                raise
-            finally:
-                await session.close()
+            await save_plan_record(
+                factory, run_id=run_id, plan=plan, provider=provider, model=model
+            )
 
         async def _load_findings(*, run_id: object) -> object:
-            import uuid as _uuid
-
-            from app.agents.schemas import ArchaeologistFindings as _Findings
-
-            _rid = run_id if isinstance(run_id, _uuid.UUID) else _uuid.UUID(str(run_id))
-            session = factory()
-            try:
-                row = await get_analysis(session, _rid)
-                if row is None:
-                    return None
-                return _Findings.model_validate(row.findings)
-            finally:
-                await session.close()
+            assert isinstance(run_id, (uuid.UUID, str))
+            return await load_findings(factory, run_id=run_id)
 
         _planner = PlannerAgent(
             llm=_llm,
@@ -253,43 +207,20 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             model: str,
             workspace_path: str,
         ) -> None:
-            import uuid as _uuid
-
-            from app.agents.schemas import DeveloperResult as _Result
-
-            _rid = run_id if isinstance(run_id, _uuid.UUID) else _uuid.UUID(str(run_id))
+            assert isinstance(run_id, (uuid.UUID, str))
             assert isinstance(result, _Result)
-            session = factory()
-            try:
-                await save_implementation(
-                    session,
-                    run_id=_rid,
-                    result=result,
-                    provider=provider,
-                    model=model,
-                    workspace_path=workspace_path,
-                )
-                await session.commit()
-            except Exception:
-                await session.rollback()
-                raise
-            finally:
-                await session.close()
+            await save_implementation_record(
+                factory,
+                run_id=run_id,
+                result=result,
+                provider=provider,
+                model=model,
+                workspace_path=workspace_path,
+            )
 
         async def _load_plan(*, run_id: object) -> object:
-            import uuid as _uuid
-
-            from app.agents.schemas import Plan as _Plan
-
-            _rid = run_id if isinstance(run_id, _uuid.UUID) else _uuid.UUID(str(run_id))
-            session = factory()
-            try:
-                row = await get_plan(session, _rid)
-                if row is None:
-                    return None
-                return _Plan.model_validate(row.plan)
-            finally:
-                await session.close()
+            assert isinstance(run_id, (uuid.UUID, str))
+            return await load_plan(factory, run_id=run_id)
 
         _workspaces = WorkspaceManager(
             root=_Path(settings.workspace_root),
@@ -297,20 +228,8 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         )
 
         async def _load_diagnosis(*, run_id: object) -> object:
-            import uuid as _uuid
-
-            from app.agents.schemas import DebuggerDiagnosis as _Diagnosis
-            from app.agents.service import get_diagnosis
-
-            _rid = run_id if isinstance(run_id, _uuid.UUID) else _uuid.UUID(str(run_id))
-            session = factory()
-            try:
-                row = await get_diagnosis(session, _rid)
-                if row is None:
-                    return None
-                return _Diagnosis.model_validate(row.diagnosis)
-            finally:
-                await session.close()
+            assert isinstance(run_id, (uuid.UUID, str))
+            return await load_diagnosis(factory, run_id=run_id)
 
         _developer = DeveloperAgent(
             llm=_llm,
@@ -324,44 +243,19 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         app.state.developer = _developer
 
         async def _save_test_result(*, run_id: object, result: object, **kwargs: object) -> None:
-            import uuid as _uuid
-
-            from app.agents.schemas import TestReport as _Report
-            from app.agents.service import save_test_result
-
-            _rid = run_id if isinstance(run_id, _uuid.UUID) else _uuid.UUID(str(run_id))
+            assert isinstance(run_id, (uuid.UUID, str))
             assert isinstance(result, _Report)
-            session = factory()
-            try:
-                await save_test_result(
-                    session,
-                    run_id=_rid,
-                    result=result,
-                    provider=str(kwargs.get("provider", "unknown")),
-                    model=str(kwargs.get("model", "unknown")),
-                )
-                await session.commit()
-            except Exception:
-                await session.rollback()
-                raise
-            finally:
-                await session.close()
+            await save_test_result_record(
+                factory,
+                run_id=run_id,
+                result=result,
+                provider=str(kwargs.get("provider", "unknown")),
+                model=str(kwargs.get("model", "unknown")),
+            )
 
         async def _load_test_report(*, run_id: object) -> object:
-            import uuid as _uuid
-
-            from app.agents.schemas import TestReport as _Report
-            from app.agents.service import get_test_result
-
-            _rid = run_id if isinstance(run_id, _uuid.UUID) else _uuid.UUID(str(run_id))
-            session = factory()
-            try:
-                row = await get_test_result(session, _rid)
-                if row is None:
-                    return None
-                return _Report.model_validate(row.result)
-            finally:
-                await session.close()
+            assert isinstance(run_id, (uuid.UUID, str))
+            return await load_test_report(factory, run_id=run_id)
 
         _tester = TesterAgent(
             llm=_llm,
@@ -374,28 +268,15 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         app.state.tester = _tester
 
         async def _save_diagnosis(*, run_id: object, diagnosis: object, **kwargs: object) -> None:
-            import uuid as _uuid
-
-            from app.agents.schemas import DebuggerDiagnosis as _Diagnosis
-            from app.agents.service import save_diagnosis
-
-            _rid = run_id if isinstance(run_id, _uuid.UUID) else _uuid.UUID(str(run_id))
+            assert isinstance(run_id, (uuid.UUID, str))
             assert isinstance(diagnosis, _Diagnosis)
-            session = factory()
-            try:
-                await save_diagnosis(
-                    session,
-                    run_id=_rid,
-                    diagnosis=diagnosis,
-                    provider=str(kwargs.get("provider", "unknown")),
-                    model=str(kwargs.get("model", "unknown")),
-                )
-                await session.commit()
-            except Exception:
-                await session.rollback()
-                raise
-            finally:
-                await session.close()
+            await save_diagnosis_record(
+                factory,
+                run_id=run_id,
+                diagnosis=diagnosis,
+                provider=str(kwargs.get("provider", "unknown")),
+                model=str(kwargs.get("model", "unknown")),
+            )
 
         _debugger = DebuggerAgent(
             llm=_llm,
@@ -408,45 +289,20 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         app.state.debugger = _debugger
 
         async def _save_review(*, run_id: object, review: object, **kwargs: object) -> None:
-            import uuid as _uuid
-
-            from app.agents.schemas import ReviewDecision as _Decision
-            from app.agents.service import save_review
-
-            _rid = run_id if isinstance(run_id, _uuid.UUID) else _uuid.UUID(str(run_id))
+            assert isinstance(run_id, (uuid.UUID, str))
             assert isinstance(review, _Decision)
-            session = factory()
-            try:
-                await save_review(
-                    session,
-                    run_id=_rid,
-                    review=review,
-                    provider=str(kwargs.get("provider", "unknown")),
-                    model=str(kwargs.get("model", "unknown")),
-                )
-                await session.commit()
-            except Exception:
-                await session.rollback()
-                raise
-            finally:
-                await session.close()
+            await save_review_record(
+                factory,
+                run_id=run_id,
+                review=review,
+                provider=str(kwargs.get("provider", "unknown")),
+                model=str(kwargs.get("model", "unknown")),
+            )
 
         async def _save_memory(*, run_id: object, candidates: object) -> None:
-            import uuid as _uuid
-
-            from app.agents.service import save_memory
-
-            _rid = run_id if isinstance(run_id, _uuid.UUID) else _uuid.UUID(str(run_id))
+            assert isinstance(run_id, (uuid.UUID, str))
             assert isinstance(candidates, list)
-            session = factory()
-            try:
-                await save_memory(session, run_id=_rid, candidates=candidates)
-                await session.commit()
-            except Exception:
-                await session.rollback()
-                raise
-            finally:
-                await session.close()
+            await save_memory_record(factory, run_id=run_id, candidates=candidates)
 
         _reviewer = ReviewerAgent(
             llm=_llm,
@@ -498,7 +354,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         raise RuntimeError("Agent wiring failed; refusing to boot with stub agents.") from exc
     orchestrator = Orchestrator(
         driver=registry,
-        session_maker=factory,
+        session_factory=as_async_session_factory(factory),
     )
     app.state.orchestrator = orchestrator
     # Embedding provider for the memory pipeline (Issue #004). Built

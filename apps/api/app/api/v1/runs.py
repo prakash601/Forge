@@ -292,7 +292,9 @@ async def apply_event_endpoint(
     approved_by = "human" if payload.event == "plan_approved" else None
     try:
         await service.get_owned_run(session, run_id, current_user.id)
-        run = await service.transition(session, run_id, payload.event, approved_by=approved_by)
+        run, from_state = await service.transition(
+            session, run_id, payload.event, approved_by=approved_by
+        )
     except RunNotFoundError as exc:
         await session.rollback()
         raise HTTPException(
@@ -344,12 +346,10 @@ async def apply_event_endpoint(
     await session.refresh(run, attribute_names=["steps"])
     response = RunRead.model_validate(run)
 
-    # Hook: notify the orchestrator. We captured the from_state on the
-    # Run instance inside ``service.transition()`` as a transient
-    # attribute; default to the new state if missing (defensive).
+    # Hook: notify the orchestrator. ``service.transition()`` returns
+    # the origin state alongside the run, so no second read is needed.
     orchestrator = _orchestrator(request)
     if orchestrator is not None:
-        from_state: RunState = getattr(run, "_from_state", run.state)
         orchestrator.handle_transition(
             run_id=run.id,
             from_state=from_state,

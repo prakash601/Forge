@@ -8,10 +8,9 @@
 
 set -euo pipefail
 
-REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-cd "$REPO_ROOT"
-
-export PATH="$HOME/.local/bin:$PATH"
+. "$(cd "$(dirname "$0")" && pwd)/lib.sh"
+forge_cd_repo_root
+forge_export_uv_path
 
 echo "==> API: sync (dev extras)"
 uv sync --directory apps/api --all-extras --quiet

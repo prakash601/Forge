@@ -30,7 +30,7 @@ import contextlib
 import uuid
 from collections.abc import AsyncIterator, Awaitable, Callable
 
-from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.logging import get_logger
 from app.metrics.registry import record_run_event
@@ -67,17 +67,11 @@ class Orchestrator:
         *,
         driver: Driver,
         runtime: InProcessRuntime | None = None,
-        session_factory: SessionFactory | None = None,
-        session_maker: async_sessionmaker[AsyncSession] | None = None,
+        session_factory: SessionFactory,
     ) -> None:
-        if session_factory is None and session_maker is None:
-            raise ValueError("Orchestrator requires either session_factory or session_maker.")
         self._driver = driver
         self._runtime = runtime or InProcessRuntime()
-        # ``session_factory`` and ``session_maker`` are the same thing
-        # under two different historical names. We keep both kwargs for
-        # readability; one is required.
-        self._session_factory = session_factory or _maker_to_factory(session_maker)  # type: ignore[arg-type]
+        self._session_factory = session_factory
 
     @property
     def driver(self) -> Driver:
@@ -313,9 +307,8 @@ async def _apply_and_capture(
 ) -> tuple[RunState, RunState] | None:
     """Apply ``event`` and capture the from/to states for the next hook."""
     try:
-        run = await apply_transition(session, run_id, event, approved_by=approved_by)
+        run, from_state = await apply_transition(session, run_id, event, approved_by=approved_by)
         await session.commit()
-        from_state: RunState = getattr(run, "_from_state", run.state)
         log.info(
             "orchestrator_event_applied",
             run_id=str(run_id),
@@ -341,17 +334,6 @@ async def _apply_and_capture(
             request_id=request_id,
         )
         return None
-
-
-def _maker_to_factory(
-    maker: async_sessionmaker[AsyncSession],
-) -> SessionFactory:
-    """Adapt an ``async_sessionmaker`` to the ``SessionFactory`` signature."""
-
-    async def factory() -> AsyncSession:
-        return maker()
-
-    return factory
 
 
 __all__ = ["Orchestrator", "SessionFactory"]

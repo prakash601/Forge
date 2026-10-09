@@ -6,14 +6,31 @@ console output in development.
 
 from __future__ import annotations
 
+import io
 import logging
 import sys
-from typing import cast
+from typing import TextIO, cast
 
 import structlog
 from structlog.typing import Processor
 
 from forge_worker.config import Settings
+
+
+class _DynamicStdout(io.TextIOBase):
+    """File-like proxy resolving ``sys.stdout`` on each write.
+
+    Binding ``sys.stdout`` at configure time captures a handle that
+    pytest's capture can close under later tests, crashing subsequent
+    log calls (Issue #85). Re-resolving per write is cheap and avoids
+    that, in both structlog and the stdlib handler.
+    """
+
+    def write(self, message: str) -> int:
+        return sys.stdout.write(message)
+
+    def flush(self) -> None:
+        sys.stdout.flush()
 
 
 def configure_logging(settings: Settings) -> None:
@@ -47,7 +64,9 @@ def configure_logging(settings: Settings) -> None:
         processors=processors,
         wrapper_class=structlog.make_filtering_bound_logger(level),
         context_class=dict,
-        logger_factory=structlog.PrintLoggerFactory(file=sys.stdout),
+        # structlog types `file` as TextIO; the proxy is file-like
+        # (write/flush) without inheriting the whole ABC (Issue #85).
+        logger_factory=structlog.PrintLoggerFactory(file=cast(TextIO, _DynamicStdout())),
         # Caching the logger captures the file handle at first use. That
         # interacts poorly with pytest's stdout capture, which closes
         # the original handle. Re-resolving the writer on each call is
@@ -55,7 +74,7 @@ def configure_logging(settings: Settings) -> None:
         cache_logger_on_first_use=False,
     )
 
-    handler = logging.StreamHandler(stream=sys.stdout)
+    handler = logging.StreamHandler(stream=_DynamicStdout())
     handler.setFormatter(logging.Formatter("%(message)s"))
     root.addHandler(handler)
     root.setLevel(level)

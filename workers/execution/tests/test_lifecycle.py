@@ -77,16 +77,6 @@ def test_worker_settings_default_to_development() -> None:
     assert worker.settings.log_level == "INFO"
 
 
-class _QuietLog:
-    """No-op logger: keeps reap tests independent of logging config."""
-
-    def info(self, *args: object, **kwargs: object) -> None:
-        pass
-
-    def warning(self, *args: object, **kwargs: object) -> None:
-        pass
-
-
 @pytest.mark.asyncio
 async def test_reap_removes_only_orphan_run_containers(
     monkeypatch: pytest.MonkeyPatch,
@@ -124,9 +114,6 @@ async def test_reap_removes_only_orphan_run_containers(
             return _FakeClient()
 
     monkeypatch.setitem(sys.modules, "docker", _FakeDocker())
-    # Hermetic logging: earlier lifecycle tests drive configure_logging
-    # under capsys, which closes the captured stdout handle.
-    monkeypatch.setattr(main_mod, "log", _QuietLog())
     assert await main_mod._reap_stale_sandbox_containers() == 1
     assert removed == ["forge-12345678-1234-1234-1234-1234567890ab-0001"]
 
@@ -143,5 +130,4 @@ async def test_reap_returns_zero_without_daemon(monkeypatch: pytest.MonkeyPatch)
             raise RuntimeError("no daemon")
 
     monkeypatch.setitem(sys.modules, "docker", _BoomDocker())
-    monkeypatch.setattr(main_mod, "log", _QuietLog())
     assert await main_mod._reap_stale_sandbox_containers() == 0

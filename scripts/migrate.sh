@@ -13,15 +13,10 @@
 
 set -euo pipefail
 
-REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-cd "$REPO_ROOT"
-
-if [ -f .env ]; then
-  set -a
-  # shellcheck disable=SC1091
-  . .env
-  set +a
-fi
+. "$(cd "$(dirname "$0")" && pwd)/lib.sh"
+forge_cd_repo_root
+forge_export_uv_path
+forge_load_dotenv
 
 DATABASE_URL="${DATABASE_URL:-postgresql+asyncpg://forge:forge@localhost:5432/forge}"
 export DATABASE_URL

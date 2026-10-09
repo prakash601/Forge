@@ -7,7 +7,7 @@ Phase 1.
 
 from __future__ import annotations
 
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Awaitable, Callable
 from typing import Any
 
 from sqlalchemy.ext.asyncio import (
@@ -73,6 +73,22 @@ def get_session_factory() -> async_sessionmaker[AsyncSession]:
     return _session_factory
 
 
+def as_async_session_factory(
+    maker: async_sessionmaker[AsyncSession],
+) -> Callable[[], Awaitable[AsyncSession]]:
+    """Adapt a sessionmaker to the async-factory shape (one session per call).
+
+    The orchestrator's ``SessionFactory`` awaits each session handoff;
+    the maker itself is sync. The adapter lives here (next to the
+    maker) so callers share one spelling (Issue #85).
+    """
+
+    async def factory() -> AsyncSession:
+        return maker()
+
+    return factory
+
+
 async def get_session() -> AsyncIterator[AsyncSession]:
     """FastAPI dependency that yields a request-scoped session."""
     factory = get_session_factory()
@@ -93,6 +109,7 @@ async def ping_database() -> None:
 __all__: list[Any] = [
     "AsyncEngine",
     "AsyncSession",
+    "as_async_session_factory",
     "dispose_engine",
     "get_session",
     "get_session_factory",

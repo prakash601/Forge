@@ -764,7 +764,7 @@ async def orchestrator_app(
     registry.register(_RunState.AWAITING_APPROVAL, PolicyAutoApproveAgent())
     orchestrator = Orchestrator(
         driver=registry,
-        session_maker=factory,
+        session_factory=db_session.as_async_session_factory(factory),
     )
     app.state.orchestrator = orchestrator
     try:
@@ -813,7 +813,7 @@ async def manual_approval_app(
     registry.register(_AwaitState.AWAITING_APPROVAL, _null_agent)
     orchestrator = Orchestrator(
         driver=registry,
-        session_maker=factory,
+        session_factory=db_session.as_async_session_factory(factory),
     )
     app.state.orchestrator = orchestrator
     try:
