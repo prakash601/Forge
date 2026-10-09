@@ -62,3 +62,17 @@ async def test_get_user_422_for_malformed_uuid(authed_client: AsyncClient) -> No
 async def test_get_user_requires_auth(client: AsyncClient) -> None:
     response = await client.get(f"/api/v1/users/{uuid.uuid4()}")
     assert response.status_code == 401
+
+
+async def test_open_signup_is_throttled(client: AsyncClient) -> None:
+    """Issue #82: hammering open signup yields 429 with Retry-After."""
+    throttled = None
+    for i in range(31):
+        response = await client.post("/api/v1/users", json={"email": f"spam{i}@x.com"})
+        if response.status_code == 429:
+            throttled = response
+            break
+        assert response.status_code == 201, response.text
+    assert throttled is not None, "31 signups from one IP were never throttled"
+    assert throttled.json()["error"]["code"] == "RATE_LIMITED"
+    assert throttled.headers.get("retry-after") is not None

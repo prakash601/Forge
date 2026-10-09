@@ -76,6 +76,11 @@ _BRANCH_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._/-]*")
 
 _SCRUB_EXACT = frozenset({"DATABASE_URL"})
 _SCRUB_PREFIXES = ("GITHUB_", "OPENAI_", "FORGE_")
+# PYTEST_* is scrubbed like a secret prefix (a PYTEST_*_TOKEN in the
+# operator env must never reach agent-driven commands); the one
+# legitimate need — extra pytest flags — is re-allowed explicitly.
+_SCRUB_PYTEST_PREFIX = "PYTEST_"
+_PYTEST_ALLOWLIST = frozenset({"PYTEST_ADDOPTS"})
 
 
 @dataclass(frozen=True)
@@ -96,15 +101,18 @@ class ExecutorConfig:
 def sanitize_env(venv_path: Path | None = None) -> dict[str, str]:
     """Copy ``os.environ`` minus secret-bearing keys.
 
-    Drops ``DATABASE_URL`` and any ``GITHUB_*``/``OPENAI_*``/``FORGE_*``
-    entries so agent-driven commands never inherit host credentials.
+    Drops ``DATABASE_URL``, any ``GITHUB_*``/``OPENAI_*``/``FORGE_*``
+    entries, and ``PYTEST_*`` except ``PYTEST_ADDOPTS``, so
+    agent-driven commands never inherit host credentials (Issue #82).
     When ``venv_path`` is set, its ``bin/`` is prepended to ``PATH``
     and ``VIRTUAL_ENV`` is pointed at it.
     """
     env = {
         key: value
         for key, value in os.environ.items()
-        if key not in _SCRUB_EXACT and not key.startswith(_SCRUB_PREFIXES)
+        if key not in _SCRUB_EXACT
+        and not key.startswith(_SCRUB_PREFIXES)
+        and (not key.startswith(_SCRUB_PYTEST_PREFIX) or key in _PYTEST_ALLOWLIST)
     }
     if venv_path is not None:
         env["PATH"] = str(venv_path / "bin") + os.pathsep + env.get("PATH", "")

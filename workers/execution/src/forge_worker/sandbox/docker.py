@@ -16,7 +16,7 @@ Container contract (decided in #58):
   ``size=`` is driver-dependent) via a ``du`` check before each run.
 * Network: ``none`` (default-deny; closes SSRF/metadata egress).
 * Env: deny-by-default allowlist (``PATH``/``LANG`` container values
-  plus ``PYTHON*``/``PYTEST_*`` passthrough). The host ``.env`` is
+  plus ``PYTEST_ADDOPTS`` only). The host ``.env`` is
   never mounted; ``DATABASE_URL``/``GITHUB_*``/``OPENAI_*``/``FORGE_*``
   never enter the container.
 * Timeouts mirror the local executor; OOM kills map to
@@ -62,9 +62,10 @@ _CONTAINER_TMPFS = {"/tmp": "size=64m,mode=1777"}  # noqa: S108 — container tm
 
 # Deny-by-default container environment. PATH/LANG/HOME and the
 # PYTHON* constants below are fixed container-safe values (never
-# inherited from the host). Only PYTEST_* passes through from the
-# operator env: host PYTHON* values (e.g. PYTHONPATH with host paths,
-# or *_TOKEN secrets) must never enter the container.
+# inherited from the host). Exactly one host variable passes through —
+# PYTEST_ADDOPTS (extra pytest flags for the Tester run). Everything
+# else stays out, so a *_TOKEN secret in the operator env can never
+# leak into the container (Issue #82).
 _CONTAINER_PATH = "/usr/local/bin:/usr/bin:/bin"
 _CONTAINER_ENV_BASE = {
     "PATH": _CONTAINER_PATH,
@@ -73,7 +74,7 @@ _CONTAINER_ENV_BASE = {
     "PYTHONDONTWRITEBYTECODE": "1",
     "PYTHONUNBUFFERED": "1",
 }
-_ENV_PASSTHROUGH_PREFIXES = ("PYTEST_",)
+_ENV_PASSTHROUGH_ALLOWLIST = frozenset({"PYTEST_ADDOPTS"})
 
 
 @dataclass(frozen=True)
@@ -107,7 +108,7 @@ def container_env() -> dict[str, str]:
     """Build the deny-by-default container environment."""
     env = dict(_CONTAINER_ENV_BASE)
     for key, value in os.environ.items():
-        if key.startswith(_ENV_PASSTHROUGH_PREFIXES):
+        if key in _ENV_PASSTHROUGH_ALLOWLIST:
             env[key] = value
     return env
 

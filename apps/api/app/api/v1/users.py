@@ -15,6 +15,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.auth.dependencies import get_current_user
 from app.core.logging import get_logger
+from app.core.rate_limit import limited
 from app.db.session import get_session
 from app.users import service
 from app.users.errors import DuplicateUserEmailError, UserNotFoundError
@@ -24,12 +25,16 @@ from app.users.schemas import UserCreate, UserRead
 router = APIRouter(prefix="/users", tags=["users"])
 log = get_logger(__name__)
 
+#: Open signup is unauthenticated by design; throttle it per IP (Issue #82).
+signup_limit = limited("signup", limit=30)
+
 
 @router.post(
     "",
     response_model=UserRead,
     status_code=status.HTTP_201_CREATED,
     summary="Create a new user.",
+    dependencies=[Depends(signup_limit)],
 )
 async def create_user_endpoint(
     request: Request,

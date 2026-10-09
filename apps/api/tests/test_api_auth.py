@@ -239,3 +239,17 @@ async def test_dev_login_403_in_production(postgres_engine_url: str) -> None:
         assert response.json()["error"]["code"] == "DEV_LOGIN_DISABLED"
     finally:
         await db_session.dispose_engine()
+
+
+async def test_dev_login_is_throttled(auth_stack: Any) -> None:
+    """Issue #82: hammering dev-login yields 429."""
+    client, _, _ = auth_stack
+    throttled = None
+    for _ in range(61):
+        response = await client.post("/api/v1/auth/dev-login", json={"email": "spam@local.test"})
+        if response.status_code == 429:
+            throttled = response
+            break
+        assert response.status_code == 200, response.text
+    assert throttled is not None, "61 dev-logins from one IP were never throttled"
+    assert throttled.json()["error"]["code"] == "RATE_LIMITED"

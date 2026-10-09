@@ -32,6 +32,38 @@ from app.runs.enums import RunState
 
 log = get_logger(__name__)
 
+# Dev-only defaults from `.env.example` (LOCAL ONLY). These are sentinel
+# values, never real secrets: booting in production with them is refused
+# (see :func:`_reject_example_secrets`). Keep in sync with `.env.example`.
+_DEV_JWT_PLACEHOLDER = (
+    "dev-only-change-me-5f6163aea7e9413bd3b8e28b97a8fe0a440c0ee7187f31cb1979fed423b7a087"
+)
+_DEV_CREDENTIALS_KEY = "V8G0Rbuyy1qK3TI5qZmSE82-M_C-iEj6-3MGXD2JwSY="
+
+
+def _reject_example_secrets(settings: Settings) -> None:
+    """Refuse to boot production on the shipped dev-only secrets.
+
+    Copy-pasting `.env.example` to a server is the expected accident;
+    fail closed with rotation guidance instead of running (Issue #82).
+    """
+    if not settings.is_production:
+        return
+    offenders = [
+        name
+        for name, value in (
+            ("FORGE_JWT_SECRET", settings.jwt_secret),
+            ("FORGE_CREDENTIALS_KEY", settings.credentials_key),
+        )
+        if value in (_DEV_JWT_PLACEHOLDER, _DEV_CREDENTIALS_KEY)
+    ]
+    if offenders:
+        raise RuntimeError(
+            f"Refusing to boot: production uses dev-only example secrets "
+            f"({', '.join(offenders)}). Generate fresh ones — see the "
+            f"comments in `.env.example` — and set them in the environment."
+        )
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
@@ -50,6 +82,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     """
     settings: Settings = app.state.settings
     configure_logging(settings)
+    _reject_example_secrets(settings)
     init_engine(settings)
     factory = get_session_factory()
     registry = StateAgentRegistry()
@@ -459,7 +492,10 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             ),
         )
     except Exception as exc:
-        log.warning("agents_wire_failed", error=str(exc))
+        # Fail fast: silently falling back to stub agents would ship a
+        # degraded loop to prod with only a warning (Issue #82).
+        log.error("agents_wire_failed", error=str(exc))
+        raise RuntimeError("Agent wiring failed; refusing to boot with stub agents.") from exc
     orchestrator = Orchestrator(
         driver=registry,
         session_maker=factory,
@@ -521,12 +557,15 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     # CORS — only honored in development. Production deployments should
     # terminate TLS at the gateway and configure CORS at that layer.
+    # Methods/headers are explicit (never "*" with credentials): the
+    # dashboard only needs JSON GET/POST/PUT/PATCH/DELETE plus the
+    # auth/content headers (Issue #82).
     app.add_middleware(
         CORSMiddleware,
         allow_origins=settings.cors_allow_origins_list,
         allow_credentials=True,
-        allow_methods=["*"],
-        allow_headers=["*"],
+        allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+        allow_headers=["Authorization", "Content-Type", "Accept"],
     )
 
     install_exception_handlers(app)

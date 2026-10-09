@@ -292,6 +292,7 @@ def test_container_env_is_deny_by_default(monkeypatch: pytest.MonkeyPatch) -> No
     monkeypatch.setenv("PYTHONPATH", "/host/paths")
     monkeypatch.setenv("PYTHON_GITHUB_TOKEN", "s")
     monkeypatch.setenv("PYTEST_KEEP", "yes")
+    monkeypatch.setenv("PYTEST_EVIL_TOKEN", "s")
     env = container_env()
     for blocked in (
         "DATABASE_URL",
@@ -301,9 +302,11 @@ def test_container_env_is_deny_by_default(monkeypatch: pytest.MonkeyPatch) -> No
         "AWS_SECRET_ACCESS_KEY",
         "PYTHONPATH",
         "PYTHON_GITHUB_TOKEN",
+        # Issue #82: the old PYTEST_* prefix passthrough could carry a secret.
+        "PYTEST_KEEP",
+        "PYTEST_EVIL_TOKEN",
     ):
         assert blocked not in env
-    assert env["PYTEST_KEEP"] == "yes"
     assert env["PATH"] == "/usr/local/bin:/usr/bin:/bin"
 
 

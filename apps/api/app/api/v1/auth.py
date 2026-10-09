@@ -29,6 +29,7 @@ from app.auth.schemas import AuthStatus
 from app.auth.service import handle_oauth_callback
 from app.auth.tokens import SESSION_COOKIE, create_session_token
 from app.core.logging import get_logger
+from app.core.rate_limit import limited
 from app.db.session import get_session
 from app.users.errors import DuplicateUserEmailError, GitHubAccountLinkedError, UserNotFoundError
 from app.users.models import User
@@ -36,6 +37,9 @@ from app.users.schemas import UserRead
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 log = get_logger(__name__)
+
+#: Login entry points are unauthenticated by design; throttle per IP (Issue #82).
+login_limit = limited("login", limit=60)
 
 
 def _not_configured(request: Request, missing: str) -> HTTPException:
@@ -101,6 +105,7 @@ async def github_login(
     response_model=UserRead,
     status_code=status.HTTP_200_OK,
     summary="Complete GitHub OAuth login and set the session cookie.",
+    dependencies=[Depends(login_limit)],
     responses={
         400: {"description": "OAuth or email verification failure."},
         409: {"description": "Email taken or GitHub account linked elsewhere."},
@@ -177,6 +182,7 @@ class DevLoginRequest(BaseModel):
     response_model=UserRead,
     status_code=status.HTTP_200_OK,
     summary="Local dev login (no GitHub OAuth). 403 in production.",
+    dependencies=[Depends(login_limit)],
 )
 async def dev_login(
     request: Request,
