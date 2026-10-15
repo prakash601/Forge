@@ -14,8 +14,8 @@
 
 set -euo pipefail
 
-REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-cd "$REPO_ROOT"
+. "$(cd "$(dirname "$0")" && pwd)/lib.sh"
+forge_cd_repo_root
 
 if [ ! -f .env ]; then
   echo "==> No .env found, copying .env.example (local dev defaults)"

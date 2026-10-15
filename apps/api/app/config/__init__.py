@@ -11,7 +11,7 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Literal
 
-from pydantic import AliasChoices, Field, field_validator
+from pydantic import AliasChoices, Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 LogLevel = Literal["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"]
@@ -36,6 +36,10 @@ class Settings(BaseSettings):
         env_file=_REPO_ROOT / ".env",
         env_file_encoding="utf-8",
         case_sensitive=False,
+        # Deliberately "ignore", not "forbid": without an env_prefix,
+        # pydantic-settings treats unrelated process env as extras and
+        # forbid breaks on any machine with stray variables. Typo
+        # protection comes from `unknown_forge_env_vars()` instead.
         extra="ignore",
         populate_by_name=True,
     )
@@ -237,6 +241,15 @@ class Settings(BaseSettings):
             return ",".join(str(v) for v in value)
         return value
 
+    @model_validator(mode="after")
+    def _require_database_url_in_production(self) -> Settings:
+        # Fail fast at settings load, not at first connect (Issue #85).
+        if self.environment == "production" and not self.database_url:
+            raise ValueError(
+                "DATABASE_URL is required in production. Set it to the managed Postgres DSN."
+            )
+        return self
+
     @property
     def cors_allow_origins_list(self) -> list[str]:
         return [origin.strip() for origin in self.cors_allow_origins.split(",") if origin.strip()]
@@ -252,6 +265,30 @@ class Settings(BaseSettings):
     @property
     def is_test(self) -> bool:
         return self.environment == "test"
+
+
+def unknown_forge_env_vars(env: dict[str, str] | None = None) -> list[str]:
+    """`FORGE_`-prefixed env vars that match no setting (likely typos).
+
+    Compensation for ``extra="ignore"`` (see the model config note):
+    callers log the result at startup instead of failing. Pure and
+    injectable for tests. Comparison is case-insensitive, matching
+    the settings loader.
+    """
+    import os
+
+    known: set[str] = set()
+    for name, field in Settings.model_fields.items():
+        known.add(name.upper())
+        alias = field.validation_alias
+        if isinstance(alias, AliasChoices):
+            known.update(str(choice).upper() for choice in alias.choices)
+        elif isinstance(alias, str):
+            known.add(alias.upper())
+    source = env if env is not None else os.environ
+    return sorted(
+        key for key in source if key.upper().startswith("FORGE_") and key.upper() not in known
+    )
 
 
 @lru_cache(maxsize=1)

@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
+
 import httpx
 
+from app.core.providers import pick_provider
 from app.memory.embeddings.fake import FakeEmbeddingProvider
 from app.memory.embeddings.gemini_provider import GeminiEmbeddingProvider
 from app.memory.embeddings.openai_provider import OpenAIEmbeddingProvider
@@ -30,28 +33,26 @@ def get_provider(
     Raises:
         ValueError: unknown provider name.
     """
-    normalized = provider_name.strip().lower()
-    if normalized == "fake":
-        return FakeEmbeddingProvider()
-    if normalized == "openai":
-        return OpenAIEmbeddingProvider(
+    resolved_model = model
+    if resolved_model in (None, OpenAIEmbeddingProvider.model):
+        resolved_model = None
+    builders: dict[str, Callable[[], EmbeddingProvider]] = {
+        "fake": FakeEmbeddingProvider,
+        "openai": lambda: OpenAIEmbeddingProvider(
             api_key=api_key,
             model=model,
             timeout_seconds=timeout_seconds,
             client=client,
-        )
-    if normalized == "gemini":
-        resolved_model = model
-        if resolved_model in (None, OpenAIEmbeddingProvider.model):
-            resolved_model = None
-        return GeminiEmbeddingProvider(
+        ),
+        "gemini": lambda: GeminiEmbeddingProvider(
             api_key=api_key,
             model=resolved_model,
             dimension=dimension,
             timeout_seconds=timeout_seconds,
             client=client,
-        )
-    raise ValueError(f"unknown embedding provider: {provider_name!r}")
+        ),
+    }
+    return pick_provider(provider_name, "embedding", builders)
 
 
 __all__ = ["get_provider"]

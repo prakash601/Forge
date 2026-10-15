@@ -14,6 +14,7 @@ import time
 import uuid
 
 from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.logging import get_logger
 from app.memory.embeddings.protocols import EmbeddingProvider
@@ -28,7 +29,7 @@ DEFAULT_RETRY_DELAYS: tuple[float, ...] = (1.0, 2.0, 4.0)
 
 
 async def embed_memory_item(
-    session: object,
+    session: AsyncSession,
     memory_item_id: uuid.UUID,
     provider: EmbeddingProvider,
     *,
@@ -50,9 +51,6 @@ async def embed_memory_item(
         MemoryItemNotFoundError: unknown ``memory_item_id``.
         EmbeddingDimensionMismatchError: provider returned wrong dims.
     """
-    from sqlalchemy.ext.asyncio import AsyncSession
-
-    assert isinstance(session, AsyncSession)
     expected = EXPECTED_DIMENSION if expected_dimension is None else expected_dimension
     item = await session.get(MemoryItem, memory_item_id)
     if item is None:
@@ -135,7 +133,7 @@ async def embed_memory_item(
 
 
 async def backfill_missing(
-    session: object,
+    session: AsyncSession,
     provider: EmbeddingProvider,
     *,
     batch_size: int = 100,
@@ -144,9 +142,6 @@ async def backfill_missing(
     expected_dimension: int | None = None,
 ) -> int:
     """Embed all rows with NULL vectors. Returns count newly embedded."""
-    from sqlalchemy.ext.asyncio import AsyncSession
-
-    assert isinstance(session, AsyncSession)
     stmt = (
         select(MemoryEmbedding.memory_item_id)
         .where(MemoryEmbedding.embedding.is_(None))

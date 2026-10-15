@@ -129,7 +129,7 @@ async def transition(
     *,
     expected_version: int | None = None,
     approved_by: str | None = None,
-) -> Run:
+) -> tuple[Run, RunState]:
     """Apply ``event`` to the Run identified by ``run_id``.
 
     The full sequence (read current state -> validate -> compute next
@@ -150,8 +150,12 @@ async def transition(
                           version they observed when reading the run).
 
     Returns:
-        The updated :class:`Run` (state, is_terminal, version refreshed,
-        ``steps`` relationship loaded for convenience).
+        ``(run, from_state)`` — the updated :class:`Run` (state,
+        is_terminal, version refreshed, ``steps`` relationship loaded
+        for convenience) plus the state it transitioned from, so
+        callers can notify the orchestrator without a second read
+        (Issue #85). The Pydantic response model deliberately does
+        not include the origin state.
 
     Raises:
         RunNotFoundError: ``run_id`` does not exist.
@@ -231,13 +235,7 @@ async def transition(
     # Refresh to surface the new state/version on the returned object.
     refreshed = await session.get(Run, run_id)
     assert refreshed is not None  # we just updated it
-    # Stash the from_state on the Run instance so the API layer can
-    # notify the orchestrator without a second database read. This is
-    # a transient attribute — it is not persisted and may disappear
-    # after session close. The Pydantic response model deliberately
-    # does not include it.
-    refreshed._from_state = current_state  # type: ignore[attr-defined]
-    return refreshed
+    return refreshed, current_state
 
 
 __all__ = ["create_run", "get_owned_run", "get_run", "transition"]

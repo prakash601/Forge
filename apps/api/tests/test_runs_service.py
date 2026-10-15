@@ -80,7 +80,7 @@ async def test_forward_path_writes_steps_and_bumps_version(
         (RunEvent.PLAN_APPROVED, RunState.IMPLEMENTING),
     ]
     for event, expected_state in path:
-        run = await service.transition(session, run.id, event.value)
+        run, _ = await service.transition(session, run.id, event.value)
         await session.commit()
         assert run.state is expected_state
         assert run.version == path.index((event, expected_state)) + 1
@@ -125,19 +125,19 @@ async def test_cancel_from_terminal_is_rejected(session: AsyncSession) -> None:
     run = await service.create_run(session, task="x")
     await session.commit()
     # Drive to a terminal state via the explicit path.
-    run = await service.transition(session, run.id, "repository_ready")
+    run, _ = await service.transition(session, run.id, "repository_ready")
     await session.commit()
-    run = await service.transition(session, run.id, "analysis_complete")
+    run, _ = await service.transition(session, run.id, "analysis_complete")
     await session.commit()
-    run = await service.transition(session, run.id, "plan_ready")
+    run, _ = await service.transition(session, run.id, "plan_ready")
     await session.commit()
-    run = await service.transition(session, run.id, "plan_approved")
+    run, _ = await service.transition(session, run.id, "plan_approved")
     await session.commit()
-    run = await service.transition(session, run.id, "implementation_complete")
+    run, _ = await service.transition(session, run.id, "implementation_complete")
     await session.commit()
-    run = await service.transition(session, run.id, "tests_passed")
+    run, _ = await service.transition(session, run.id, "tests_passed")
     await session.commit()
-    run = await service.transition(session, run.id, "review_passed")
+    run, _ = await service.transition(session, run.id, "review_passed")
     await session.commit()
     assert is_terminal_state(run.state)
 

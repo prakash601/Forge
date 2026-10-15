@@ -299,9 +299,9 @@ async def test_transition_records_approved_by(session: Any) -> None:
     run = await service.create_run(session, task="approval audit")
     await session.commit()
     for event in ("repository_ready", "analysis_complete", "plan_ready"):
-        run = await service.transition(session, run.id, event)
+        run, _ = await service.transition(session, run.id, event)
         await session.commit()
-    run = await service.transition(session, run.id, "plan_approved", approved_by="policy")
+    run, _ = await service.transition(session, run.id, "plan_approved", approved_by="policy")
     await session.commit()
     assert run.state.value == "IMPLEMENTING"
     await session.refresh(run, attribute_names=["steps"])
