@@ -1,0 +1,3 @@
+# Shared per-fixture venvs built once from fixtures/*/requirements.txt
+# (see workers/execution/tests/conftest.py). Never committed.
+.venvs/
