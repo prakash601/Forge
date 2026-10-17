@@ -5,16 +5,20 @@ description = "Forge control-plane API (FastAPI)"
 requires-python = ">=3.11"
 dependencies = [
     "fastapi>=0.115,<0.142",
-    "uvicorn[standard]>=0.30,<0.53",
-    "pydantic>=2.7,<3",
+    "uvicorn[standard]>=0.30,<0.55",
+    "pydantic[email]>=2.7,<3",
     "pydantic-settings>=2.4,<3",
     "sqlalchemy[asyncio]>=2.0,<3",
-    "asyncpg>=0.29,<0.32",
+    "asyncpg>=0.29,<0.33",
     "psycopg[binary]>=3.2,<4",
     "alembic>=1.13,<2",
     "structlog>=24.1,<27",
     "httpx>=0.27,<0.30",
     "anyio>=4.4,<5",
+    "pgvector>=0.5.0",
+    "PyJWT>=2.4,<3",
+    "cryptography>=42,<47",
+    "prometheus-client>=0.20,<1",
 ]
 
 [project.optional-dependencies]
@@ -23,7 +27,9 @@ dev = [
     "pytest-asyncio>=0.23,<1.5",
     "ruff>=0.6,<1",
     "mypy>=1.10,<3",
-    "aiosqlite>=0.20,<0.23",
+    # Postgres-only test runs. Started on demand via testcontainers; tests
+    # can be pointed at an external Postgres with FORGE_TEST_DATABASE_URL.
+    "testcontainers[postgres]>=4.8,<5",
 ]
 
 [build-system]
@@ -56,11 +62,25 @@ ignore = [
 [tool.ruff.lint.per-file-ignores]
 "app/db/**" = ["E501"]  # Long SQL strings inside db/ are fine.
 "app/config/**" = ["S104"]  # 0.0.0.0 is the default API bind address.
+"app/runs/enums.py" = ["UP042"]  # (str, Enum) is more compatible than StrEnum with Pydantic/SQLAlchemy.
+"app/users/enums.py" = ["UP042"]  # Same justification.
+"app/projects/enums.py" = ["UP042"]  # Same.
+"app/memory/enums.py" = ["UP042"]  # Same.
+"app/orchestrator/runtime.py" = ["S110", "ASYNC109"]  # Best-effort coroutine close; explicit asyncio.wait timeout is intentional.
+"tests/conftest.py" = ["ASYNC240", "S110", "S105", "S106"]  # Path() at startup; best-effort container teardown; canned OAuth settings.
+"app/auth/**" = ["S105", "S106"]  # Token/secret plumbing is this package's job; no hardcoded secrets.
+"app/github/**" = ["S105", "S106"]  # Credential seam; tokens arrive at runtime, never hardcoded.
+"tests/test_auth_*.py" = ["S105", "S106"]  # Canned test credentials only, never real secrets.
+"tests/test_api_auth.py" = ["S105", "S106"]  # Same: canned OAuth settings for the fake client.
+"tests/test_api_tenancy.py" = ["S105", "S106"]  # Same: two-identity fake OAuth settings.
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 testpaths = ["tests"]
 addopts = "-ra --strict-markers"
+markers = [
+    "integration: requires a Postgres database (started via testcontainers).",
+]
 
 [tool.mypy]
 python_version = "3.11"

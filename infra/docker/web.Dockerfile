@@ -8,13 +8,19 @@ WORKDIR /app
 RUN corepack enable
 COPY package.json pnpm-workspace.yaml pnpm-lock.yaml* ./
 COPY apps/web/package.json apps/web/package.json
-RUN pnpm install --filter @forge/web... --frozen-lockfile
+RUN pnpm install --frozen-lockfile
 
 FROM node:24-alpine AS builder
 WORKDIR /app
 RUN corepack enable
 COPY --from=deps /app /app
 COPY apps/web/ apps/web/
+# Runtime API URLs are read server-side per request (see lib/urls.ts),
+# so the build only needs placeholders.
+ARG API_BASE_URL=http://api:8000
+ARG NEXT_PUBLIC_API_BASE_URL=http://localhost:8000
+ENV API_BASE_URL=${API_BASE_URL}
+ENV NEXT_PUBLIC_API_BASE_URL=${NEXT_PUBLIC_API_BASE_URL}
 RUN pnpm --filter @forge/web build
 
 FROM node:24-alpine AS runner

@@ -1,0 +1,39 @@
+# Alert rules for the Forge single-host deployment (Phase 4, Issue #019).
+#
+# Migration failures have no metric to alert on: `scripts/deploy.sh`
+# runs migrations synchronously and exits nonzero (blocking the deploy
+# loudly) — see infra/DEPLOY_RUNBOOK.md. These rules cover runtime.
+groups:
+  - name: forge
+    interval: 30s
+    rules:
+      - alert: ForgeAPIDown
+        expr: up{job="forge-api"} == 0
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Forge API is down"
+          runbook: "infra/DEPLOY_RUNBOOK.md#operations"
+
+      - alert: ForgeHighErrorRate
+        expr: |
+          sum by (route) (
+            rate(forge_http_requests_total{status=~"5.."}[5m])
+          )
+          /
+          sum by (route) (
+            rate(forge_http_requests_total[5m])
+          ) > 0.05
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High 5xx rate on {{ $labels.route }}"
+
+      - alert: ForgePRPublicationFailing
+        expr: increase(forge_pr_publications_total{outcome="failed"}[15m]) > 0
+        labels:
+          severity: warning
+        annotations:
+          summary: "PR publication failures — check publisher logs and credential"

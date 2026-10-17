@@ -11,7 +11,7 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Literal
 
-from pydantic import Field, field_validator
+from pydantic import AliasChoices, Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 LogLevel = Literal["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"]
@@ -36,7 +36,12 @@ class Settings(BaseSettings):
         env_file=_REPO_ROOT / ".env",
         env_file_encoding="utf-8",
         case_sensitive=False,
+        # Deliberately "ignore", not "forbid": without an env_prefix,
+        # pydantic-settings treats unrelated process env as extras and
+        # forbid breaks on any machine with stray variables. Typo
+        # protection comes from `unknown_forge_env_vars()` instead.
         extra="ignore",
+        populate_by_name=True,
     )
 
     # ----- Runtime -----
@@ -70,6 +75,162 @@ class Settings(BaseSettings):
         ),
     )
 
+    # ----- Embeddings (Issue #004) -----
+    embedding_provider: str = Field(
+        default="fake",
+        validation_alias=AliasChoices("embedding_provider", "FORGE_EMBEDDING_PROVIDER"),
+        description=(
+            "Embedding provider name: 'fake' (CI/tests), 'openai' "
+            "(text-embedding-3-small), or 'gemini' (Gemini embedContent, "
+            "free tier via Google AI Studio)."
+        ),
+    )
+    openai_api_key: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices(
+            "openai_api_key",
+            "OPENAI_API_KEY",
+            "FORGE_OPENAI_API_KEY",
+            "FORGE_LLM_API_KEY",
+            "GEMINI_API_KEY",
+            "FORGE_GEMINI_API_KEY",
+            "FORGE_EMBEDDING_API_KEY",
+        ),
+        description=(
+            "API key for the LLM gateway. Required when llm_provider is "
+            "'openai' or 'opencode' (an OpenCode service-account key works "
+            "for the latter)."
+        ),
+    )
+    embedding_model: str = Field(
+        default="text-embedding-3-small",
+        validation_alias=AliasChoices("embedding_model", "FORGE_EMBEDDING_MODEL"),
+        description="Embedding model name.",
+    )
+    embedding_dimension: int = Field(
+        default=1536,
+        validation_alias=AliasChoices("embedding_dimension", "FORGE_EMBEDDING_DIMENSION"),
+        ge=1,
+        description="Expected embedding dimension (matches VECTOR column).",
+    )
+    embedding_timeout_seconds: float = Field(
+        default=30.0,
+        validation_alias=AliasChoices(
+            "embedding_timeout_seconds", "FORGE_EMBEDDING_TIMEOUT_SECONDS"
+        ),
+        gt=0,
+        description="HTTP timeout for embedding provider calls.",
+    )
+
+    # ----- LLM (Issue #005) -----
+    llm_provider: str = Field(
+        default="fake",
+        validation_alias=AliasChoices("llm_provider", "FORGE_LLM_PROVIDER"),
+        description=(
+            "LLM provider name: 'fake' (CI/tests), 'openai' "
+            "(api.openai.com), or 'opencode' (OpenCode inference, "
+            "OpenAI-compatible). Any of the latter two honor llm_base_url."
+        ),
+    )
+    llm_base_url: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices("llm_base_url", "FORGE_LLM_BASE_URL"),
+        description=(
+            "Override root for an OpenAI-compatible chat-completions "
+            "gateway ('/chat/completions' is appended). Defaults to "
+            "api.openai.com for 'openai' and "
+            "opencode.ai/inference/openai/v1 for 'opencode'."
+        ),
+    )
+    llm_model: str = Field(
+        default="gpt-4o-mini",
+        validation_alias=AliasChoices("llm_model", "FORGE_LLM_MODEL"),
+        description="LLM model name. Overridable per call ('gpt-4o' allowed).",
+    )
+    llm_timeout_seconds: float = Field(
+        default=30.0,
+        validation_alias=AliasChoices("llm_timeout_seconds", "FORGE_LLM_TIMEOUT_SECONDS"),
+        gt=0,
+        description="HTTP timeout for LLM provider calls.",
+    )
+    llm_max_output_tokens: int = Field(
+        default=1024,
+        validation_alias=AliasChoices("llm_max_output_tokens", "FORGE_LLM_MAX_OUTPUT_TOKENS"),
+        ge=1,
+        description="Default cap on LLM output tokens (cost control).",
+    )
+
+    # ----- Planning / approval / workspaces (Issue #008; default flipped in #020) -----
+    auto_approve: bool = Field(
+        default=False,
+        validation_alias=AliasChoices("auto_approve", "FORGE_AUTO_APPROVE"),
+        description=(
+            "v1.0 default: plans wait for human approval (approved_by=human). "
+            "When true, every plan is policy-approved (legacy behavior). "
+            "When false, only projects with auto_approve_policy set get "
+            "policy approval."
+        ),
+    )
+    test_timeout_seconds: float = Field(
+        default=120.0,
+        validation_alias=AliasChoices("test_timeout_seconds", "FORGE_TEST_TIMEOUT_SECONDS"),
+        gt=0,
+        description="Per-command timeout for Tester pytest runs.",
+    )
+    workspace_root: str = Field(
+        default=str(_REPO_ROOT / ".forge-workspaces"),
+        validation_alias=AliasChoices("workspace_root", "FORGE_WORKSPACE_ROOT"),
+        description="Root directory for per-run Developer task workspaces.",
+    )
+
+    # ----- Archaeologist fixture repo (Issue #007) -----
+    fixture_repo_path: str = Field(
+        default=str(_REPO_ROOT / "fixtures" / "todo-app"),
+        validation_alias=AliasChoices("fixture_repo_path", "FORGE_FIXTURE_REPO_PATH"),
+        description="Filesystem path to the reference fixture repo analyzed by the Archaeologist.",
+    )
+
+    # ----- Auth (Phase 4, Issue #015, decided in #56) -----
+    github_client_id: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices("github_client_id", "GITHUB_CLIENT_ID"),
+        description="GitHub OAuth app client ID. Absent → /auth/* returns 503.",
+    )
+    github_client_secret: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices("github_client_secret", "GITHUB_CLIENT_SECRET"),
+        description="GitHub OAuth app client secret. Never logged or exposed.",
+    )
+    github_oauth_callback_url: str = Field(
+        default="http://localhost:8000/api/v1/auth/github/callback",
+        validation_alias=AliasChoices("github_oauth_callback_url", "FORGE_GITHUB_CALLBACK_URL"),
+        description="OAuth redirect URI registered on the GitHub app.",
+    )
+    jwt_secret: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices("jwt_secret", "FORGE_JWT_SECRET", "JWT_SECRET"),
+        description="HS256 secret for session JWTs. Required for login sessions.",
+    )
+    credentials_key: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices("credentials_key", "FORGE_CREDENTIALS_KEY"),
+        description="Fernet key (urlsafe base64) for GitHub tokens at rest.",
+    )
+    jwt_expiry_seconds: int = Field(
+        default=86_400,
+        validation_alias=AliasChoices("jwt_expiry_seconds", "FORGE_JWT_EXPIRY_SECONDS"),
+        gt=0,
+        description="Session JWT lifetime in seconds (default 24h).",
+    )
+    web_base_url: str = Field(
+        default="http://localhost:3000",
+        validation_alias=AliasChoices("web_base_url", "FORGE_WEB_BASE_URL", "WEB_BASE_URL"),
+        description=(
+            "Dashboard origin. OAuth callback redirects land here only; "
+            "any other destination falls back to JSON."
+        ),
+    )
+
     @field_validator("cors_allow_origins", mode="before")
     @classmethod
     def _coerce_cors(cls, value: object) -> object:
@@ -79,6 +240,15 @@ class Settings(BaseSettings):
         if isinstance(value, list):
             return ",".join(str(v) for v in value)
         return value
+
+    @model_validator(mode="after")
+    def _require_database_url_in_production(self) -> Settings:
+        # Fail fast at settings load, not at first connect (Issue #85).
+        if self.environment == "production" and not self.database_url:
+            raise ValueError(
+                "DATABASE_URL is required in production. Set it to the managed Postgres DSN."
+            )
+        return self
 
     @property
     def cors_allow_origins_list(self) -> list[str]:
@@ -95,6 +265,30 @@ class Settings(BaseSettings):
     @property
     def is_test(self) -> bool:
         return self.environment == "test"
+
+
+def unknown_forge_env_vars(env: dict[str, str] | None = None) -> list[str]:
+    """`FORGE_`-prefixed env vars that match no setting (likely typos).
+
+    Compensation for ``extra="ignore"`` (see the model config note):
+    callers log the result at startup instead of failing. Pure and
+    injectable for tests. Comparison is case-insensitive, matching
+    the settings loader.
+    """
+    import os
+
+    known: set[str] = set()
+    for name, field in Settings.model_fields.items():
+        known.add(name.upper())
+        alias = field.validation_alias
+        if isinstance(alias, AliasChoices):
+            known.update(str(choice).upper() for choice in alias.choices)
+        elif isinstance(alias, str):
+            known.add(alias.upper())
+    source = env if env is not None else os.environ
+    return sorted(
+        key for key in source if key.upper().startswith("FORGE_") and key.upper() not in known
+    )
 
 
 @lru_cache(maxsize=1)
