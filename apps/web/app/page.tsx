@@ -1,49 +1,136 @@
-import { createApiClient, type ReadyResponse } from "@/lib/api";
+import Link from "next/link";
+
+import { createApiClient } from "@/lib/api";
+import { sessionCookie } from "@/lib/session";
+import { publicApiBaseUrl, serverApiBaseUrl } from "@/lib/urls";
+import { LoginPrompt } from "@/components/LoginButton";
+import { LogoutButton } from "@/components/LogoutButton";
+import { NewRunForm } from "@/components/NewRunForm";
+import { StateBadge } from "@/components/RunLive";
 
 interface HomePageProps {
   searchParams: { [key: string]: string | string[] | undefined };
 }
 
-async function checkBackend(apiBaseUrl: string): Promise<ReadyResponse | null> {
-  const client = createApiClient(apiBaseUrl);
-  try {
-    return await client.getReady();
-  } catch {
-    return null;
-  }
+function apiBaseUrl(searchParams: HomePageProps["searchParams"]): string {
+  return serverApiBaseUrl(searchParams);
 }
 
 export default async function Home({ searchParams }: HomePageProps) {
-  const apiBaseUrl =
-    typeof searchParams.api === "string" && searchParams.api
-      ? searchParams.api
-      : (process.env.API_BASE_URL ?? "http://localhost:8000");
+  const baseUrl = apiBaseUrl(searchParams);
+  // Browser-facing fetches (forms, SSE, login) must use the public URL:
+  // inside Docker `API_BASE_URL=http://api:8000` is unreachable from the laptop.
+  const browserBaseUrl = publicApiBaseUrl(baseUrl);
+  const cookie = await sessionCookie();
+  const client = createApiClient(baseUrl, { cookie });
 
-  const ready = await checkBackend(apiBaseUrl);
-
+  let ready = null;
+  try {
+    ready = await client.getReady();
+  } catch {
+    ready = null;
+  }
   const isConnected = ready?.status === "ok";
-  const statusClass = isConnected ? "connected" : "disconnected";
-  const statusText = isConnected
-    ? `Connected to API (v${ready?.version ?? "?"})`
-    : `Cannot reach API at ${apiBaseUrl}`;
+
+  let me = null;
+  try {
+    me = await client.getMe();
+  } catch {
+    // Logged out or unreachable: the login prompt covers both (the
+    // status indicator above tells them apart).
+    me = null;
+  }
+
+  if (me === null) {
+    return (
+      <main className="dashboard">
+        <span className="phase">
+          <span className="dot" />
+          Phase 4 — Public MVP
+        </span>
+        <h1>Forge</h1>
+        <div className={`status ${isConnected ? "connected" : "disconnected"}`}>
+          <span className="indicator" />
+          <span>
+            {isConnected
+              ? `Connected to API (v${ready?.version ?? "?"})`
+              : `Cannot reach API at ${baseUrl}`}
+          </span>
+        </div>
+        <LoginPrompt apiBaseUrl={browserBaseUrl} />
+      </main>
+    );
+  }
+
+  const projects = await client.listProjects().catch(() => null);
+  // Project-scoped run list (Issue #83): `?project=<id>` filters;
+  // unknown ids fall back to unfiltered rather than erroring.
+  const wanted = typeof searchParams.project === "string" ? searchParams.project : "";
+  const selected = (projects ?? []).find((project) => project.id === wanted) ?? null;
+  const listing = await client.listRuns(20, 0, selected?.id).catch(() => null);
 
   return (
-    <main>
+    <main className="dashboard">
       <span className="phase">
         <span className="dot" />
-        Phase 0 — Repository Bootstrap
+        Phase 4 — Public MVP
       </span>
       <h1>Forge</h1>
-      <p className="tagline">
-        An AI software engineering system that maintains persistent project
-        context and owns the engineering loop. The product is not implemented
-        yet — this page proves that the web, API, and database stack come up
-        locally.
-      </p>
-      <div className={`status ${statusClass}`}>
+      <div className={`status ${isConnected ? "connected" : "disconnected"}`}>
         <span className="indicator" />
-        <span>{statusText}</span>
+        <span>
+          {isConnected
+            ? `Connected to API (v${ready?.version ?? "?"})`
+            : `Cannot reach API at ${baseUrl}`}
+        </span>{" "}
+        <LogoutButton apiBaseUrl={browserBaseUrl} email={me.email} />
       </div>
+
+      <section className="panel">
+        <h2>New run</h2>
+        <NewRunForm apiBaseUrl={browserBaseUrl} projects={projects ?? []} />
+      </section>
+
+      <section className="panel runs">
+        <h2>Runs{listing ? ` (${listing.total})` : ""}</h2>
+        {(projects ?? []).length > 1 ? (
+          <nav className="project-filter" aria-label="Filter runs by project">
+            <Link href="/" aria-current={selected === null ? "page" : undefined}>
+              All projects
+            </Link>
+            {(projects ?? []).map((project) => (
+              <Link
+                key={project.id}
+                href={`/?project=${encodeURIComponent(project.id)}`}
+                aria-current={selected?.id === project.id ? "page" : undefined}
+              >
+                {project.name}
+              </Link>
+            ))}
+          </nav>
+        ) : null}
+        {!listing ? (
+          <p className="muted">Could not load runs from the API.</p>
+        ) : listing.runs.length === 0 ? (
+          <p className="muted">No runs yet. Describe a task above to start one.</p>
+        ) : (
+          <ul className="run-list">
+            {listing.runs.map((run) => (
+              <li key={run.id}>
+                <Link href={`/runs/${run.id}`}>
+                  <span className="run-task">{run.task}</span>
+                  <span className="run-meta">
+                    <StateBadge state={run.state} />
+                    <span className="muted">
+                      {new Date(run.updated_at).toLocaleString()}
+                    </span>
+                  </span>
+                </Link>
+              </li>
+            ))}
+          </ul>
+        )}
+      </section>
     </main>
   );
 }

@@ -1,0 +1,298 @@
+"""HTTP endpoints for auth (v1, Phase 4 Issue #015).
+
+* ``GET /api/v1/auth/github/login`` — 307 to the GitHub authorize URL.
+* ``GET /api/v1/auth/github/callback`` — exchange → link → session cookie.
+* ``GET /api/v1/auth/me`` — the caller (401 without a valid session).
+* ``POST /api/v1/auth/logout`` — clear the session cookie.
+
+OAuth itself runs through the :mod:`app.auth.github` seam; tests
+override :func:`get_oauth_client` with the fake (no network in CI).
+"""
+
+from __future__ import annotations
+
+import secrets
+from typing import Annotated
+
+from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
+from pydantic import BaseModel, Field
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.auth.dependencies import cipher_or_503, get_current_user
+from app.auth.errors import (
+    GitHubOAuthError,
+    NoGitHubEmailError,
+    UnverifiedEmailError,
+)
+from app.auth.github import GitHubOAuthClient, RealGitHubOAuthClient
+from app.auth.schemas import AuthStatus
+from app.auth.service import handle_oauth_callback
+from app.auth.tokens import SESSION_COOKIE, create_session_token
+from app.core.logging import get_logger
+from app.core.rate_limit import limited
+from app.db.session import get_session
+from app.users.errors import DuplicateUserEmailError, GitHubAccountLinkedError, UserNotFoundError
+from app.users.models import User
+from app.users.schemas import UserRead
+
+router = APIRouter(prefix="/auth", tags=["auth"])
+log = get_logger(__name__)
+
+#: Login entry points are unauthenticated by design; throttle per IP (Issue #82).
+login_limit = limited("login", limit=60)
+
+
+def _not_configured(request: Request, missing: str) -> HTTPException:
+    return HTTPException(
+        status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+        detail={
+            "code": "AUTH_NOT_CONFIGURED",
+            "message": f"Auth is not configured (missing {missing}).",
+            "request_id": request.state.request_id,
+        },
+    )
+
+
+async def get_oauth_client(request: Request) -> GitHubOAuthClient:
+    """Build the OAuth client from settings, or 503 when unconfigured.
+
+    Overridden in tests with :class:`FakeGitHubOAuthClient` via
+    ``app.dependency_overrides``.
+    """
+    settings = request.app.state.settings
+    if not settings.github_client_id or not settings.github_client_secret:
+        raise _not_configured(request, "GitHub OAuth credentials")
+    return RealGitHubOAuthClient(
+        client_id=settings.github_client_id,
+        client_secret=settings.github_client_secret,
+    )
+
+
+def _set_session_cookie(response: Response, *, token: str, request: Request) -> None:
+    settings = request.app.state.settings
+    response.set_cookie(
+        key=SESSION_COOKIE,
+        value=token,
+        max_age=settings.jwt_expiry_seconds,
+        httponly=True,
+        samesite="lax",
+        secure=settings.is_production,
+        path="/",
+    )
+
+
+@router.get(
+    "/github/login",
+    status_code=status.HTTP_307_TEMPORARY_REDIRECT,
+    summary="Redirect to GitHub OAuth authorize.",
+    responses={503: {"description": "GitHub OAuth is not configured."}},
+)
+async def github_login(
+    request: Request,
+    client: Annotated[GitHubOAuthClient, Depends(get_oauth_client)],
+    next: str | None = None,
+) -> Response:
+    settings = request.app.state.settings
+    # Landing is validated here AND at the callback (defense in depth):
+    # an invalid `next` degrades to an unbound random state.
+    state = _landing_url(request, next) or secrets.token_urlsafe(16)
+    url = client.login_url(redirect_uri=settings.github_oauth_callback_url, state=state)
+    return Response(status_code=status.HTTP_307_TEMPORARY_REDIRECT, headers={"location": url})
+
+
+@router.get(
+    "/github/callback",
+    response_model=UserRead,
+    status_code=status.HTTP_200_OK,
+    summary="Complete GitHub OAuth login and set the session cookie.",
+    dependencies=[Depends(login_limit)],
+    responses={
+        400: {"description": "OAuth or email verification failure."},
+        409: {"description": "Email taken or GitHub account linked elsewhere."},
+        503: {"description": "Auth is not configured."},
+    },
+)
+async def github_callback(
+    request: Request,
+    session: Annotated[AsyncSession, Depends(get_session)],
+    client: Annotated[GitHubOAuthClient, Depends(get_oauth_client)],
+    code: str,
+    state: str | None = None,
+) -> Response:
+    settings = request.app.state.settings
+    if not settings.jwt_secret:
+        raise _not_configured(request, "jwt_secret")
+    cipher = cipher_or_503(request)
+    try:
+        user, token = await handle_oauth_callback(
+            session,
+            client=client,
+            code=code,
+            redirect_uri=settings.github_oauth_callback_url,
+            cipher=cipher,
+            jwt_secret=settings.jwt_secret,
+            jwt_expiry_seconds=settings.jwt_expiry_seconds,
+        )
+    except (GitHubOAuthError, NoGitHubEmailError, UnverifiedEmailError) as exc:
+        await session.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={
+                "code": "OAUTH_FAILED",
+                "message": str(exc),
+                "request_id": request.state.request_id,
+            },
+        ) from exc
+    except (DuplicateUserEmailError, GitHubAccountLinkedError) as exc:
+        await session.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={
+                "code": "CONFLICT",
+                "message": str(exc),
+                "request_id": request.state.request_id,
+            },
+        ) from exc
+    await session.commit()
+    log.info("user_logged_in", user_id=str(user.id), request_id=request.state.request_id)
+    landing = _landing_url(request, state)
+    if landing is not None:
+        # Browser flow (Phase 4, #022): back to the dashboard, session set.
+        redirect = Response(
+            status_code=status.HTTP_307_TEMPORARY_REDIRECT,
+            headers={"location": landing},
+        )
+        _set_session_cookie(redirect, token=token, request=request)
+        return redirect
+    body = UserRead.model_validate(user).model_dump_json().encode("utf-8")
+    response = Response(content=body, media_type="application/json")
+    _set_session_cookie(response, token=token, request=request)
+    return response
+
+
+class DevLoginRequest(BaseModel):
+    """Local-only login (no OAuth). Disabled in production."""
+
+    email: str = Field(min_length=3, max_length=320, description="Local dev email.")
+    display_name: str | None = Field(default=None, max_length=255)
+
+
+@router.post(
+    "/dev-login",
+    response_model=UserRead,
+    status_code=status.HTTP_200_OK,
+    summary="Local dev login (no GitHub OAuth). 403 in production.",
+    dependencies=[Depends(login_limit)],
+)
+async def dev_login(
+    request: Request,
+    payload: DevLoginRequest,
+    session: Annotated[AsyncSession, Depends(get_session)],
+) -> Response:
+    """Mint a session cookie for a local email address.
+
+    Local-only convenience so the dashboard is usable on a laptop
+    without GitHub OAuth credentials, a domain, or TLS. Disabled
+    in production (403 ``DEV_LOGIN_DISABLED``) and requires
+    ``jwt_secret`` like the OAuth callback.
+    """
+    from app.users import service as users_service
+
+    settings = request.app.state.settings
+    if settings.is_production:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail={
+                "code": "DEV_LOGIN_DISABLED",
+                "message": "Dev login is disabled in production.",
+                "request_id": request.state.request_id,
+            },
+        )
+    if not settings.jwt_secret:
+        raise _not_configured(request, "jwt_secret")
+    email = payload.email.strip().lower()
+    if "@" not in email:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail={
+                "code": "VALIDATION_ERROR",
+                "message": "Enter a valid email address.",
+                "request_id": request.state.request_id,
+            },
+        )
+    try:
+        try:
+            user = await users_service.get_user_by_email(session, email)
+        except UserNotFoundError:
+            user = await users_service.create_user(
+                session, email=email, display_name=payload.display_name
+            )
+    except DuplicateUserEmailError as exc:
+        await session.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={
+                "code": "CONFLICT",
+                "message": str(exc),
+                "request_id": request.state.request_id,
+            },
+        ) from exc
+    await session.commit()
+    token = create_session_token(
+        user_id=user.id,
+        secret=settings.jwt_secret,
+        expires_in_seconds=settings.jwt_expiry_seconds,
+    )
+    log.info("dev_user_logged_in", user_id=str(user.id), request_id=request.state.request_id)
+    body = UserRead.model_validate(user).model_dump_json().encode("utf-8")
+    response = Response(content=body, media_type="application/json")
+    _set_session_cookie(response, token=token, request=request)
+    return response
+
+
+def _landing_url(request: Request, state: str | None) -> str | None:
+    """Validate an OAuth ``state`` as a dashboard landing URL.
+
+    Only absolute URLs under the configured web origin are accepted
+    (bare origin included); anything else falls back to the JSON
+    response (no open redirect).
+    """
+    if not state:
+        return None
+    base: str = request.app.state.settings.web_base_url.rstrip("/")
+    candidate = state.strip()
+    if candidate == base:
+        return base + "/"
+    if not candidate.startswith(base + "/") or "//" in candidate[len(base) :]:
+        return None
+    return candidate
+
+
+@router.get(
+    "/me",
+    response_model=UserRead,
+    status_code=status.HTTP_200_OK,
+    summary="Read the authenticated caller.",
+    responses={401: {"description": "No valid session."}},
+)
+async def read_me(
+    current_user: Annotated[User, Depends(get_current_user)],
+) -> UserRead:
+    return UserRead.model_validate(current_user)
+
+
+@router.post(
+    "/logout",
+    response_model=AuthStatus,
+    status_code=status.HTTP_200_OK,
+    summary="Clear the session cookie.",
+)
+async def logout(request: Request) -> Response:
+    body = AuthStatus(ok=True).model_dump_json().encode("utf-8")
+    response = Response(content=body, media_type="application/json")
+    response.delete_cookie(key=SESSION_COOKIE, path="/")
+    log.info("user_logged_out", request_id=request.state.request_id)
+    return response
+
+
+__all__ = ["get_oauth_client", "router"]

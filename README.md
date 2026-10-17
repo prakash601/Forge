@@ -23,12 +23,17 @@ The product thesis and target users are summarized below; the full PRD is mainta
 
 ## Current project status
 
-**Phase 0 — Repository Bootstrap.**
+**Phase 1 — MVP Vertical Slice Foundations.** The Phase 0 repository
+bootstrap is complete; we are now building the durable orchestration
+backbone (Run state machine, schema, minimal API). Agents and the
+autonomous loop come in Phase 2.
 
-This phase establishes the repository foundation only. The following are **not implemented yet**:
+See [docs/STATUS.md](docs/STATUS.md) for the phase ledger, current goal,
+and the index of all run-task issues.
+
+**Not implemented yet (Phase 2+):**
 
 - The AI agent runtime (Archaeologist, Architect, Developer, Tester, Debugger, Reviewer).
-- The orchestrator / run state machine.
 - The autonomous coding loop.
 - GitHub repository integration and PR automation.
 - Project memory retrieval.
@@ -147,36 +152,54 @@ Package managers:
 
 ## Local development
 
+No domain, TLS, or cloud services needed. Everything runs on your laptop.
+
 ### Prerequisites
 
 - Docker and Docker Compose v2.
-- Python 3.11+ and `uv` (https://docs.astral.sh/uv/).
-- Node.js 24+ and `pnpm` (https://pnpm.io/).
 
-### First-time setup
+That's it for the Docker path. For the host-reload path you also need
+Python 3.11+ with `uv`, and Node.js 24+ with `pnpm`.
+
+### Option A — one command (recommended)
 
 ```bash
-# 1. Copy environment template
+# First time only (local dev defaults, fake LLM/embeddings, dev secrets)
 cp .env.example .env
 
-# 2. Start local infrastructure (PostgreSQL + pgvector)
+# Build + start postgres, migrations, API, worker, web
+./scripts/local-up.sh
+# or detached: ./scripts/local-up.sh -d
+```
+
+Then open:
+
+- Web: http://localhost:3000
+- API health: http://localhost:8000/health
+- API readiness: http://localhost:8000/ready
+
+Log in with the **Continue locally** form (any email, e.g. `dev@local.test`).
+No GitHub OAuth needed: `POST /api/v1/auth/dev-login` mints a session
+cookie. GitHub login stays available if you add OAuth credentials later.
+The endpoint returns 403 in production.
+
+Stop with `docker compose down`. Data persists in the `forge-postgres-data`
+volume; `docker compose down -v` wipes it.
+
+### Option B — host processes with reload
+
+```bash
+cp .env.example .env
 docker compose up -d postgres
 
-# 3. Install Python dependencies for the API and worker
 export PATH="$HOME/.local/bin:$PATH"
 uv sync --directory apps/api
 uv sync --directory workers/execution
-
-# 4. Run database migrations
 uv run --directory apps/api alembic upgrade head
-
-# 5. Install Node dependencies for the web app
 pnpm install
 ```
 
-### Running the applications
-
-In three terminals (or with a process manager of your choice):
+In three terminals:
 
 ```bash
 # Terminal 1 — API on :8000
@@ -189,21 +212,51 @@ uv run --directory workers/execution python -m forge_worker
 pnpm --filter @forge/web dev
 ```
 
-Then open:
+### How local login works
 
-- Web: http://localhost:3000
-- API health: http://localhost:8000/health
-- API readiness: http://localhost:8000/ready
+- `.env` ships dev-only `FORGE_JWT_SECRET` / `FORGE_CREDENTIALS_KEY`
+  (local use only — never deploy these).
+- `POST /api/v1/auth/dev-login {"email": ...}` creates-or-finds the user
+  and sets the `forge_session` cookie. Disabled in production.
+- LLM/embeddings default to `fake` (no network, no keys). Set
+  `FORGE_LLM_PROVIDER=openai` / `FORGE_EMBEDDING_PROVIDER=openai` with
+  `OPENAI_API_KEY` only when you want real model calls.
 
-The Phase 0 home page shows the word **Forge** and a small indicator of backend connectivity. The API only exposes `GET /health` and `GET /ready` plus the versioned router under `/api/v1` (which is empty until Phase 1).
-
-### Running everything with Docker
+### Real LLM via OpenCode inference (needs your key)
 
 ```bash
-docker compose up
+# in .env — never commit this file
+FORGE_LLM_PROVIDER=opencode
+FORGE_LLM_API_KEY=<your-opencode-key>   # service-account key, Bearer auth
+FORGE_LLM_MODEL=kimi-k2.5               # chat model id (glm-5, minimax-m2.5, …)
+# FORGE_LLM_BASE_URL=                   # optional: custom gateway root
 ```
 
-This starts PostgreSQL plus optional `api`, `worker`, and `web` profiles. See [`docker-compose.yml`](docker-compose.yml) for the current set of services and profiles.
+Then rebuild the API and restart:
+
+```bash
+docker compose up --build -d
+```
+
+This calls `https://opencode.ai/inference/openai/v1/chat/completions`
+(OpenAI-compatible). Strict JSON-schema mode is tried first; if the
+gateway rejects it, Forge retries once in plain-JSON mode. Token usage
+is logged per call (`llm_call` events) and visible at `/metrics`.
+
+### Real embeddings via Gemini (free tier)
+
+Get a free key at Google AI Studio (`aistudio.google.com`), then in `.env`:
+
+```bash
+FORGE_EMBEDDING_PROVIDER=gemini
+GEMINI_API_KEY=<your-key>
+```
+
+Then `docker compose up --build -d`. This uses `gemini-embedding-001`
+with 1536-dim output, so it fits the existing `VECTOR(1536)` column —
+no migration. Keep `FORGE_EMBEDDING_DIMENSION=1536`. Watch
+`memory_embedding_attempt` lines in the API logs for per-item
+success/failure.
 
 ---
 
@@ -237,6 +290,16 @@ Current variables:
 | `ENVIRONMENT` | API, worker | `development`, `test`, or `production` |
 | `API_BASE_URL` | Web | URL the browser uses to reach the API |
 | `CORS_ALLOW_ORIGINS` | API | Comma-separated list of allowed origins |
+| `FORGE_EMBEDDING_PROVIDER` | API | `fake` (default, CI-safe) or `openai` |
+| `OPENAI_API_KEY` | API | Required only when provider is `openai`; never needed in CI |
+| `FORGE_EMBEDDING_MODEL` | API | Model name (default `text-embedding-3-small`) |
+| `FORGE_EMBEDDING_DIMENSION` | API | Expected dims (default 1536, matches `VECTOR` column) |
+| `FORGE_EMBEDDING_TIMEOUT_SECONDS` | API | HTTP timeout (default 30.0) |
+| `FORGE_LLM_PROVIDER` | API | `fake` (default, CI-safe) or `openai` |
+| `OPENAI_API_KEY` / `FORGE_OPENAI_API_KEY` | API | Required only when LLM or embedding provider is `openai`; never needed in CI |
+| `FORGE_LLM_MODEL` | API | LLM model name (default `gpt-4o-mini`, `gpt-4o` override allowed) |
+| `FORGE_LLM_TIMEOUT_SECONDS` | API | HTTP timeout for LLM calls (default 30.0) |
+| `FORGE_LLM_MAX_OUTPUT_TOKENS` | API | Default cap on LLM output tokens, cost control (default 1024) |
 
 Secrets (LLM provider keys, GitHub tokens, etc.) are **not** introduced in Phase 0. When they are added, they will be required from a secret manager — never committed to the repository.
 
