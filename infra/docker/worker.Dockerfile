@@ -1,8 +1,9 @@
 # Forge execution worker image
 #
-# Builds a slim image that runs the worker skeleton. Phase 0 only starts,
-# logs, and shuts down; the image intentionally does NOT include
-# docker-in-docker or any sandbox capabilities.
+# Runs the worker skeleton (Phase 0: start, log, shut down). The image
+# does NOT embed a Docker daemon: sandboxing talks to the host daemon
+# over a mounted socket (deploy concern, Phase 4 #019). The `docker`
+# Python client ships via uv sync; no docker-in-docker involved.
 
 FROM python:3.11-slim
 
@@ -15,7 +16,9 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 
 RUN pip install --no-cache-dir uv==0.4.18 \
     && groupadd --system --gid 1000 forge \
-    && useradd --system --uid 1000 --gid forge --home /app forge
+    && useradd --system --uid 1000 --gid forge --home /app forge \
+    && mkdir -p /app/.cache/uv \
+    && chown -R forge:forge /app
 
 WORKDIR /app
 
